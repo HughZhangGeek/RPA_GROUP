@@ -1,5 +1,6 @@
 # coding=utf-8
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import time
 from typing import Optional
@@ -48,7 +49,25 @@ class GroupConfigRequest(BaseModel):
 
 
 # 配置日志记录
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# 定义格式
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# 控制台输出
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# 文件输出（自动轮转）
+file_handler = RotatingFileHandler(
+    'rpa.log',
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=5
+)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 # 常量配置
 CONFIDENCE = 0.9  # 图像识别置信度
@@ -297,6 +316,11 @@ async def start_automation(request: GroupConfigRequest):
         "task_id": task.id,
         "monitor": f"/tasks/{task.id}"
     }
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    task = celery_app.AsyncResult(task_id)
+    return {"status": task.status, "result": task.result}
 
 
 if __name__ == "__main__":
