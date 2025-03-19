@@ -1,18 +1,20 @@
 # coding=utf-8
-import time
-import os
 import logging
+import os
+import time
 from typing import Optional
+
+import keyboard
 import pandas as pd
 import pyautogui
-import pyperclip
-import keyboard
 import pygetwindow as gw
-from celery import Celery
+import pyperclip
 import uvicorn
+from celery import Celery
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
-from fastapi import FastAPI,  Depends, HTTPException, status
 from pydantic import BaseModel
+
 # from functools import lru_cache
 
 # API鉴权配置
