@@ -68,6 +68,7 @@ ACTION_MAP = {
     '激活钉钉': ('activate_window', '钉钉', None),
     '粘贴': ('paste', None, None),
     '输入': ('typewrite', None, None),
+    '滚动屏幕':('scroll', None, None)
 }
 
 
@@ -207,6 +208,7 @@ def execute_command(action: str, value: str) -> Optional[bool]:
     elif action_type == 'hotkey':
         keyboard.press_and_release(value)
     elif action_type == 'sleep':
+        logging.info(f"等待 {value} 秒...")
         time.sleep(float(value))
     elif action_type == 'check_image':
         return check_image_exists(value)
@@ -217,6 +219,9 @@ def execute_command(action: str, value: str) -> Optional[bool]:
         pyautogui.hotkey('ctrl', 'v')  # 更可靠的粘贴方式
     elif action_type == 'typewrite':
         pyautogui.typewrite(value, interval=0.1)
+    elif action_type == 'scroll':
+        logging.info("滚动屏幕")
+        scroll_page('down')
     else:
         raise ValueError(f"未实现的操作类型: {action_type}")
 
@@ -230,7 +235,14 @@ def execute_command(action: str, value: str) -> Optional[bool]:
 def data_update(_id):
     pass
 
-
+def scroll_page(direction):
+    """模拟 Page Down/Up 键"""
+    if direction == "down":
+        logging.info("滚动屏幕")
+        pyautogui.press("pagedown")
+    else:
+        pyautogui.press("pageup")
+    time.sleep(0.2)  # 添加延迟确保操作生效
 # 核心执行逻辑改造
 def execute_workflow(group_config: dict):
     """新版主工作流程"""
@@ -288,7 +300,7 @@ async def start_automation(request: GroupConfigRequest):
 if __name__ == "__main__":
     uvicorn.run(
         "RPA:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=True  # 开发模式热更新
     )
