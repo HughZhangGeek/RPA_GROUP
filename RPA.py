@@ -3,7 +3,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import time
-from typing import Optional
+from typing import Optional, List
 
 import keyboard
 import pandas as pd
@@ -11,10 +11,13 @@ import pyautogui
 import pygetwindow as gw
 import pyperclip
 import uvicorn
+import requests
+import json
 from celery import Celery
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
+
 
 # from functools import lru_cache
 
@@ -22,7 +25,8 @@ from pydantic import BaseModel
 API_KEYS = "eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il"
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-
+# 在配置区添加常量
+WECOM_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=152e22b4-7e18-403d-8e4c-4806b36da9bd'
 async def validate_api_key(api_key: str = Depends(api_key_header)):
     """API密钥验证依赖项"""
     if not api_key or api_key not in API_KEYS:
@@ -253,10 +257,10 @@ def execute_command(action: str, value: str) -> Optional[bool]:
 #     return pyautogui.locateCenterOnScreen(img_path, confidence=CONFIDENCE)
 #
 
-def data_update(_id):
+def data_update(_id: str):
     pass
 
-def scroll_page(direction):
+def scroll_page(direction: str):
     """模拟 Page Down/Up 键"""
     if direction == "down":
         logging.info("滚动屏幕")
@@ -265,11 +269,63 @@ def scroll_page(direction):
         pyautogui.press("pageup")
     time.sleep(0.2)  # 添加延迟确保操作生效
 # 核心执行逻辑改造
+
+def send_wecom_robot_message(
+        content: str,
+        webhook_url: str,
+        msg_type: str ,
+        mentioned_list: Optional[List[str]] = None,
+        mentioned_mobile_list: Optional[List[str]] = None
+) -> bool:
+    """
+    发送企业微信群机器人消息
+
+    :param content: 消息内容（文本或Markdown内容）
+    :param webhook_url: 机器人Webhook地址
+    :param msg_type: 消息类型（text/markdown）
+    :param mentioned_list: 需要@的用户ID列表
+    :param mentioned_mobile_list: 需要@的手机号列表
+    :return: 是否发送成功
+    """
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "msgtype": msg_type,
+        msg_type: {
+            "content": content,
+            "mentioned_list": mentioned_list or [],
+            "mentioned_mobile_list": mentioned_mobile_list or []
+        }
+    }
+
+    try:
+        response = requests.post(
+            url=webhook_url,
+            headers=headers,
+            json=payload,
+            timeout=10
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        if result.get("errcode") != 0:
+            logging.error(f"企业微信消息发送失败: {result.get('errmsg')}")
+            return False
+
+        logging.info("企业微信消息发送成功")
+        return True
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"消息请求失败: {str(e)}")
+        return False
+    except json.JSONDecodeError:
+        logging.error("响应解析失败")
+        return False
+
 def execute_workflow(group_config: dict):
     """新版主工作流程"""
     try:
         logging.info(group_config['群类型'])
-        if group_config['群类型'] == '企业微信群':
+        if group_config['群类型'] == '企微群':
             command_df = pd.read_excel(EXCEL_PATH, sheet_name='企微建群')
         else:
             command_df = pd.read_excel(EXCEL_PATH, sheet_name='钉钉建群')
@@ -284,11 +340,39 @@ def execute_workflow(group_config: dict):
             else:
                 logging.info(f"[{idx + 1}/{len(command_df)}] 执行: {option} => {value}")
                 execute_command(option, value)
+            # 成功通知
+            # success_msg = f"建群成功通知：\n群名称：{group_config.get('群名称')}\n创建时间：{time.strftime('%Y-%m-%d %H:%M:%S')}"
+        # success_msg = f'''<font color=\"info\">建群成功通知</font>
+        #                          >客户名称:<font color=\"comment\">{group_config.get('客户名称')}</font>
+        #                          >群名称:<font color=\"comment\">{group_config.get('粘贴群名称')}</font>
+        #                          >创建时间:<font color=\"comment\">{time.strftime('%Y-%m-%d %H:%M:%S')}</font>'''
+        success_msg =f'''建群成功通知：\n客户名称：{group_config.get('客户名称')}\n群名称：{group_config.get('粘贴群名称')}\n创建时间：{time.strftime('%Y-%m-%d %H:%M:%S')}'''
+        send_wecom_robot_message(
+            content=success_msg,
+            webhook_url=WECOM_WEBHOOK_URL,
+            msg_type="text",
+            mentioned_mobile_list=[group_config.get('技术支持手机号')]  # @替换技术支持
+        )
 
+        logging.info("工作流执行完毕")
     except FileNotFoundError:
         logging.error("指令文件不存在，路径：%s", os.path.abspath(EXCEL_PATH))
-    except Exception as e:
+    except (pyautogui.PyAutoGUIException, KeyboardInterrupt) as e:
         logging.error("工作流执行异常：%s", str(e))
+        # 失败通知
+        # error_msg = f"<font color=\"warning\">建群失败告警：</font>\n客户名称：{group_config.get('客户名称')}\n错误信息：{str(e)}\n发生时间：{time.strftime('%Y-%m-%d %H:%M:%S')}"
+        # error_msg = f'''<font color=\"warning\">建群失败告警</font>，请相关技术支持注意。
+        #  >客户名称:<font color=\"comment\">{group_config.get('客户名称')}</font>
+        #  >错误信息:<font color=\"comment\">{str(e)}</font>
+        #  >发生时间:<font color=\"comment\">{time.strftime('%Y-%m-%d %H:%M:%S')}</font>'''
+        error_msg = f'''建群失败告警：\n客户名称：{group_config.get('客户名称')}\n错误信息：{str(e)}\n发生时间：{time.strftime('%Y-%m-%d %H:%M:%S')}'''
+        send_wecom_robot_message(
+            content=error_msg,
+            webhook_url=WECOM_WEBHOOK_URL,
+            msg_type="text",
+            mentioned_mobile_list=[group_config.get('技术支持手机号'),'18852645418']  # @运维人员&技术支持
+        )
+        raise  # 保持原有异常抛出
 
 
 # Celery任务定义
