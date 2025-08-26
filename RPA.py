@@ -26,7 +26,7 @@ API_KEYS = "eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il"
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # 在配置区添加常量
-WECOM_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=152e22b4-7e18-403d-8e4c-4806b36da9bd'
+WECOM_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=83a3f024-568b-4570-ac12-8d94e08be18b'
 async def validate_api_key(api_key: str = Depends(api_key_header)):
     """API密钥验证依赖项"""
     if not api_key or api_key not in API_KEYS:
@@ -346,13 +346,13 @@ def execute_workflow(group_config: dict):
         #                          >客户名称:<font color=\"comment\">{group_config.get('客户名称')}</font>
         #                          >群名称:<font color=\"comment\">{group_config.get('粘贴群名称')}</font>
         #                          >创建时间:<font color=\"comment\">{time.strftime('%Y-%m-%d %H:%M:%S')}</font>'''
-        success_msg =f'''建群成功通知：\n客户名称：{group_config.get('客户名称')}\n群名称：{group_config.get('粘贴群名称')}\n创建时间：{time.strftime('%Y-%m-%d %H:%M:%S')}'''
-        send_wecom_robot_message(
-            content=success_msg,
-            webhook_url=WECOM_WEBHOOK_URL,
-            msg_type="text",
-            mentioned_mobile_list=[group_config.get('技术支持手机号')]  # @替换技术支持
-        )
+        # success_msg =f'''建群成功通知：\n客户名称：{group_config.get('客户名称')}\n群名称：{group_config.get('粘贴群名称')}\n创建时间：{time.strftime('%Y-%m-%d %H:%M:%S')}'''
+        # send_wecom_robot_message(
+        #     content=success_msg,
+        #     webhook_url=WECOM_WEBHOOK_URL,
+        #     msg_type="text",
+        #     mentioned_mobile_list=[group_config.get('技术支持手机号')]  # @替换技术支持
+        # )
 
         logging.info("工作流执行完毕")
     except FileNotFoundError:

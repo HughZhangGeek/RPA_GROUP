@@ -38,7 +38,8 @@ pip install -r requirements.txt
 4. 启动服务
 ```bash
 uvicorn RPA:app --reload
-celery -A RPA:celery_app worker --loglevel=info -P eventle
+celery -A RPA:celery_app worker --loglevel=info -P eventlet
+
 ```
 
 ## API文档
