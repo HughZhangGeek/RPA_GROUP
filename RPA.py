@@ -678,8 +678,20 @@ def execute_workflow(group_config: dict):
                 send_wecom_robot_message(
                     content=error_msg,
                     webhook_url=WECOM_WEBHOOK_URL,
-                    msg_type="markdown",
-                    mentioned_mobile_list=[group_config.get('技术支持手机号'), '18852645418']
+                    msg_type="markdown"
+                )
+
+                # 发送text消息@技术支持（Markdown不支持mentioned_mobile_list）
+                customer_name = group_config.get('客户名称', '未知客户')
+                tech_support_phone = group_config.get('技术支持手机号')
+                mention_text = f"{customer_name}在「{detail if detail else option}」过程中遇到问题，请对应技术支持及时处理"
+                mention_mobiles = [tech_support_phone, '18852645418'] if tech_support_phone else ['18852645418']
+
+                send_wecom_robot_message(
+                    content=mention_text,
+                    webhook_url=WECOM_WEBHOOK_URL,
+                    msg_type="text",
+                    mentioned_mobile_list=mention_mobiles
                 )
 
                 # 检查是否是风控导致的错误，如果队列已暂停则记录失败任务
