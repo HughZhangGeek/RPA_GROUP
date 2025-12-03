@@ -21,7 +21,7 @@ import requests
 import json
 import redis
 from celery import Celery
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
@@ -83,6 +83,46 @@ async def validate_api_key(api_key: str = Depends(api_key_header)):
 
 # FastAPI实例
 app = FastAPI()
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """API 请求日志中间件"""
+    request_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 获取请求信息
+    method = request.method
+    url = str(request.url)
+    client_ip = request.client.host if request.client else "unknown"
+
+    # 读取请求体（仅对 POST/PUT/PATCH 请求）
+    body = None
+    if method in ["POST", "PUT", "PATCH"]:
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                body = body_bytes.decode('utf-8')
+                # 尝试解析为 JSON 格式化输出
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            body = "<读取请求体失败>"
+
+    # 记录请求日志
+    log_msg = f"API请求 | 时间: {request_time} | 方法: {method} | URL: {url} | IP: {client_ip}"
+    if body:
+        log_msg += f" | 请求体: {json.dumps(body, ensure_ascii=False) if isinstance(body, dict) else body}"
+    logging.info(log_msg)
+
+    # 执行请求
+    response = await call_next(request)
+
+    # 记录响应状态
+    logging.info(f"API响应 | 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 状态码: {response.status_code} | URL: {url}")
+
+    return response
 
 
 @app.on_event("startup")
