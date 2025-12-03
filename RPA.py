@@ -207,25 +207,32 @@ def enhanced_click(click_times: int, button: str, target: str, mode: str) -> boo
         ValueError: 坐标格式错误时抛出
         TimeoutError: 图片查找超时抛出
     """
-    start_time = time.time()
-
     if mode == 'image':
-        # 带超时机制的图像查找
-        while (time.time() - start_time) < RETRY_TIMEOUT:
-            # position = get_image_position(target)
+        # 第一次尝试查找图片
+        logging.info(f"第一次尝试查找图片 [{target}]...")
+        position = pyautogui.locateCenterOnScreen(target, confidence=CONFIDENCE)
+
+        if not position:
+            # 第一次找不到，等待2秒后再试
+            logging.info(f"未找到图片，等待2秒后重试 [{target}]...")
+            time.sleep(2)
+
+            # 第二次尝试查找图片
+            logging.info(f"第二次尝试查找图片 [{target}]...")
             position = pyautogui.locateCenterOnScreen(target, confidence=CONFIDENCE)
-            if position:
-                pyautogui.click(
-                    x=position.x,
-                    y=position.y,
-                    clicks=click_times,
-                    interval=CLICK_INTERVAL,
-                    button=button.lower()
-                )
-                return True
-            logging.info(f"等待目标图像 [{target}]...")
-            time.sleep(RETRY_INTERVAL)
-        raise TimeoutError(f"未找到目标图像 [{target}]")
+
+        if position:
+            pyautogui.click(
+                x=position.x,
+                y=position.y,
+                clicks=click_times,
+                interval=CLICK_INTERVAL,
+                button=button.lower()
+            )
+            return True
+
+        # 两次都找不到，抛出异常
+        raise TimeoutError(f"未找到目标图像 [{target}]（已尝试2次）")
 
     if mode == 'location':
         try:
@@ -624,6 +631,10 @@ def send_wecom_robot_message(
             }
         }
 
+    # 记录企微推送请求日志
+    request_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logging.info(f"企微推送请求 | 时间: {request_time} | URL: {webhook_url} | 类型: {msg_type} | 请求体: {json.dumps(payload, ensure_ascii=False)}")
+
     try:
         response = requests.post(
             url=webhook_url,
@@ -738,6 +749,17 @@ def execute_workflow(group_config: dict):
                 if is_queue_paused():
                     logging.warning("任务执行中检测到队列暂停（Redis风控），记录失败任务")
                     log_failed_task(group_config, str(e))
+
+                # 任务失败后清理操作：按ESC退出当前页面，点击坐标回到初始状态
+                try:
+                    logging.info("执行任务失败后清理操作...")
+                    pyautogui.press('escape')
+                    time.sleep(0.5)
+                    pyautogui.click(x=1070, y=892)
+                    time.sleep(0.5)
+                    logging.info("清理操作完成（ESC + 点击坐标1070,892）")
+                except Exception as cleanup_error:
+                    logging.warning(f"清理操作执行失败: {str(cleanup_error)}")
 
                 # 重新抛出异常以终止工作流
                 raise
