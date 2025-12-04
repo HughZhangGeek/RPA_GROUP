@@ -49,6 +49,10 @@ redis_client = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=T
 QUEUE_PAUSED_KEY = 'rpa:queue_paused'  # Redis中的暂停标志key
 RESUME_TOKEN_KEY = 'rpa:resume_token'  # Redis中的恢复token key
 TASK_RUNNING_KEY = 'rpa:task_running'  # Redis中的任务执行状态key
+TASK_HISTORY_KEY = 'rpa:task_history'  # 任务历史ID列表
+TASK_DETAIL_PREFIX = 'rpa:task:'  # 任务详情Hash前缀
+TASK_HISTORY_MAX = 100  # 保留最近100条历史记录
+TASK_DETAIL_EXPIRE = 86400 * 7  # 任务详情保留7天
 
 # 全局状态管理（仅用于FastAPI进程内部）
 queue_lock = threading.Lock()  # 队列状态锁
@@ -473,6 +477,113 @@ def is_queue_paused() -> bool:
     return redis_client.get(QUEUE_PAUSED_KEY) == '1'
 
 
+def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pending', error_msg: str = None):
+    """
+    保存任务详情到Redis
+
+    Args:
+        task_id: Celery任务ID
+        group_config: 任务配置
+        task_status: 任务状态 (pending/running/success/failed)
+        error_msg: 错误信息（失败时）
+    """
+    task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
+    task_data = {
+        'task_id': task_id,
+        'customer_name': group_config.get('客户名称', 'N/A'),
+        'group_type': group_config.get('群类型', 'N/A'),
+        'group_name': group_config.get('粘贴群名称', 'N/A'),
+        'status': task_status,
+        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'error_msg': error_msg or '',
+        'config_json': json.dumps(group_config, ensure_ascii=False)
+    }
+
+    # 使用 hmset 兼容旧版本 Redis
+    redis_client.hmset(task_key, task_data)
+    redis_client.expire(task_key, TASK_DETAIL_EXPIRE)
+
+    # 添加到历史列表（头部插入，保持时间倒序）
+    redis_client.lpush(TASK_HISTORY_KEY, task_id)
+    # 只保留最近N条记录
+    redis_client.ltrim(TASK_HISTORY_KEY, 0, TASK_HISTORY_MAX - 1)
+
+    logging.info(f"任务已保存到Redis: {task_id}, 状态: {task_status}")
+
+
+def update_task_status(task_id: str, task_status: str, error_msg: str = None):
+    """
+    更新任务状态
+
+    Args:
+        task_id: 任务ID
+        task_status: 新状态
+        error_msg: 错误信息（可选）
+    """
+    task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
+    if redis_client.exists(task_key):
+        # 使用单独的 hset 调用兼容旧版本 Redis
+        redis_client.hset(task_key, 'status', task_status)
+        redis_client.hset(task_key, 'updated_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        if error_msg:
+            redis_client.hset(task_key, 'error_msg', error_msg)
+        logging.info(f"任务状态已更新: {task_id} -> {task_status}")
+
+
+def get_task_detail(task_id: str) -> dict:
+    """获取单个任务详情"""
+    task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
+    data = redis_client.hgetall(task_key)
+    return data if data else None
+
+
+def get_task_history(limit: int = 50, offset: int = 0) -> list:
+    """
+    获取任务历史列表
+
+    Args:
+        limit: 返回数量
+        offset: 偏移量
+
+    Returns:
+        任务详情列表
+    """
+    # 获取任务ID列表
+    task_ids = redis_client.lrange(TASK_HISTORY_KEY, offset, offset + limit - 1)
+
+    tasks = []
+    for task_id in task_ids:
+        detail = get_task_detail(task_id)
+        if detail:
+            tasks.append(detail)
+
+    return tasks
+
+
+def get_queue_stats() -> dict:
+    """获取队列统计信息"""
+    # Celery队列长度
+    celery_queue_len = redis_client.llen('celery')
+
+    # 统计各状态任务数量
+    task_ids = redis_client.lrange(TASK_HISTORY_KEY, 0, -1)
+    stats = {'pending': 0, 'running': 0, 'success': 0, 'failed': 0}
+
+    for task_id in task_ids:
+        detail = get_task_detail(task_id)
+        if detail and detail.get('status') in stats:
+            stats[detail['status']] += 1
+
+    return {
+        'queue_paused': is_queue_paused(),
+        'task_running': is_task_running(),
+        'celery_queue_length': celery_queue_len,
+        'total_tasks': len(task_ids),
+        **stats
+    }
+
+
 def handle_risk_control_detection(group_config: dict = None):
     """
     处理风控检测逻辑
@@ -789,12 +900,24 @@ def automation_task(self, group_config: dict):
     Raises:
         QueuePausedException: 队列暂停时抛出，触发延迟重试
     """
+    task_id = self.request.id
+
+    # 更新任务状态为运行中
+    update_task_status(task_id, 'running')
+
     try:
         execute_workflow(group_config)
+        # 任务成功完成
+        update_task_status(task_id, 'success')
     except QueuePausedException as e:
-        # 队列暂停，延迟重试
+        # 队列暂停，延迟重试（保持pending状态）
+        update_task_status(task_id, 'pending', '队列暂停，等待恢复')
         logging.warning(f"队列暂停检测到，{TASK_RETRY_DELAY}秒后重试...")
         raise self.retry(exc=e, countdown=TASK_RETRY_DELAY, max_retries=None)
+    except Exception as e:
+        # 任务失败
+        update_task_status(task_id, 'failed', str(e))
+        raise
 
 
 # API端点
@@ -811,6 +934,13 @@ async def start_automation(request: GroupConfigRequest):
     }
     """
     task = automation_task.delay(request.group_config)
+
+    # 保存任务到Redis（初始状态为pending）
+    try:
+        save_task_to_redis(task.id, request.group_config, 'pending')
+    except Exception as e:
+        logging.warning(f"保存任务到Redis失败（不影响任务执行）: {str(e)}")
+
     return {
         "status": "任务已提交",
         "task_id": task.id,
@@ -861,6 +991,205 @@ async def resume_queue_endpoint(token: str):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token无效，请使用正确的恢复链接"
         )
+
+
+# ============ 队列监控 API ============
+
+@app.get("/api/queue/stats")
+async def api_queue_stats():
+    """获取队列统计信息"""
+    return get_queue_stats()
+
+
+@app.get("/api/queue/history")
+async def api_queue_history(limit: int = 50, offset: int = 0):
+    """
+    获取任务历史列表
+
+    Args:
+        limit: 返回数量（默认50）
+        offset: 偏移量（默认0）
+    """
+    tasks = get_task_history(limit, offset)
+    total = redis_client.llen(TASK_HISTORY_KEY)
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "tasks": tasks
+    }
+
+
+@app.get("/api/queue/task/{task_id}")
+async def api_task_detail(task_id: str):
+    """获取单个任务详情"""
+    detail = get_task_detail(task_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return detail
+
+
+@app.get("/queue-monitor")
+async def queue_monitor_page():
+    """队列监控页面"""
+    from fastapi.responses import HTMLResponse
+    html_content = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPA 队列监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; font-size: 24px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+        .stat-card .number { font-size: 32px; font-weight: bold; }
+        .stat-card .label { color: #666; font-size: 14px; margin-top: 5px; }
+        .stat-card.paused { background: #fff3cd; }
+        .stat-card.running { background: #d4edda; }
+        .stat-card.success .number { color: #28a745; }
+        .stat-card.failed .number { color: #dc3545; }
+        .stat-card.pending .number { color: #ffc107; }
+        .section { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .section h2 { font-size: 18px; margin-bottom: 15px; color: #333; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; font-weight: 600; color: #333; }
+        tr:hover { background: #f8f9fa; }
+        .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-running { background: #cce5ff; color: #004085; }
+        .status-success { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .refresh-btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .refresh-btn:hover { background: #0056b3; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .auto-refresh { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #666; }
+        .error-msg { color: #dc3545; font-size: 12px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .task-id { font-family: monospace; font-size: 12px; color: #666; }
+        .empty { text-align: center; padding: 40px; color: #999; }
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            th, td { padding: 8px; font-size: 14px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>RPA 拉群队列监控</h1>
+            <div class="auto-refresh">
+                <label><input type="checkbox" id="autoRefresh" checked> 自动刷新</label>
+                <button class="refresh-btn" onclick="loadData()">刷新</button>
+            </div>
+        </div>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card"><div class="number">-</div><div class="label">加载中...</div></div>
+        </div>
+
+        <div class="section">
+            <h2>任务历史</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>客户名称</th>
+                        <th>群名称</th>
+                        <th>群类型</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>更新时间</th>
+                        <th>错误信息</th>
+                    </tr>
+                </thead>
+                <tbody id="taskList">
+                    <tr><td colspan="7" class="empty">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const statusMap = {
+            'pending': '等待中',
+            'running': '执行中',
+            'success': '成功',
+            'failed': '失败'
+        };
+
+        async function loadData() {
+            try {
+                // 获取统计
+                const statsRes = await fetch('/api/queue/stats');
+                const stats = await statsRes.json();
+
+                document.getElementById('statsGrid').innerHTML = `
+                    <div class="stat-card ${stats.queue_paused ? 'paused' : ''}">
+                        <div class="number">${stats.queue_paused ? '已暂停' : '正常'}</div>
+                        <div class="label">队列状态</div>
+                    </div>
+                    <div class="stat-card ${stats.task_running ? 'running' : ''}">
+                        <div class="number">${stats.task_running ? '是' : '否'}</div>
+                        <div class="label">任务执行中</div>
+                    </div>
+                    <div class="stat-card pending">
+                        <div class="number">${stats.pending}</div>
+                        <div class="label">等待中</div>
+                    </div>
+                    <div class="stat-card success">
+                        <div class="number">${stats.success}</div>
+                        <div class="label">成功</div>
+                    </div>
+                    <div class="stat-card failed">
+                        <div class="number">${stats.failed}</div>
+                        <div class="label">失败</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">${stats.celery_queue_length}</div>
+                        <div class="label">队列长度</div>
+                    </div>
+                `;
+
+                // 获取历史
+                const historyRes = await fetch('/api/queue/history?limit=50');
+                const history = await historyRes.json();
+
+                if (history.tasks.length === 0) {
+                    document.getElementById('taskList').innerHTML = '<tr><td colspan="7" class="empty">暂无任务记录</td></tr>';
+                } else {
+                    document.getElementById('taskList').innerHTML = history.tasks.map(task => `
+                        <tr>
+                            <td>${task.customer_name || '-'}</td>
+                            <td>${task.group_name || '-'}</td>
+                            <td>${task.group_type || '-'}</td>
+                            <td><span class="status status-${task.status}">${statusMap[task.status] || task.status}</span></td>
+                            <td>${task.created_at || '-'}</td>
+                            <td>${task.updated_at || '-'}</td>
+                            <td class="error-msg" title="${task.error_msg || ''}">${task.error_msg || '-'}</td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('加载数据失败:', e);
+            }
+        }
+
+        // 初始加载
+        loadData();
+
+        // 自动刷新
+        setInterval(() => {
+            if (document.getElementById('autoRefresh').checked) {
+                loadData();
+            }
+        }, 5000);
+    </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content)
 
 
 if __name__ == "__main__":
