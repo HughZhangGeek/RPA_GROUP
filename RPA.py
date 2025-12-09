@@ -902,7 +902,7 @@ def execute_workflow(group_config: dict):
                 # 任务失败后清理操作：按ESC退出当前页面，点击坐标回到初始状态
                 try:
                     logging.info("执行任务失败后清理操作...")
-                    pyautogui.press('escape')
+                    # pyautogui.press('escape')
                     time.sleep(0.5)
                     pyautogui.click(x=1070, y=892)
                     time.sleep(0.5)
