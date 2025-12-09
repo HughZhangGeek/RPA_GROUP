@@ -1243,9 +1243,9 @@ async def queue_monitor_page():
                 document.getElementById('taskList').innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
             } else {
                 document.getElementById('taskList').innerHTML = tasks.map(task => {
-                    // 重试按钮条件：状态为failed + 操作说明为"点击"+"创建群" + 异常类型为ImageNotFoundException
+                    // 重试按钮条件：状态为failed + 操作说明为"点击“+”创建群" + 异常类型为ImageNotFoundException
                     const canRetry = task.status === 'failed'
-                        && task.error_detail === '点击"+"创建群'
+                        && task.error_detail === '点击“+”创建群'
                         && task.error_type === 'ImageNotFoundException';
                     return `
                     <tr>
