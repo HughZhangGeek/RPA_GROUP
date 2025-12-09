@@ -42,7 +42,7 @@ ERROR_SHOTS_DIR = './file/pictures/error_shots'  # 截图保存目录
 FAILED_TASKS_LOG = 'failed_tasks.log'  # 失败任务日志文件
 MONITOR_INTERVAL = 1  # 监听间隔（秒）
 RESUME_TOKEN_EXPIRE = 3600  # 恢复token过期时间（秒），默认1小时
-TASK_RETRY_DELAY = 30  # 队列暂停时任务重试延迟（秒）
+TASK_RETRY_DELAY = 5  # 队列暂停时任务重试延迟（秒）
 
 # Redis连接（用于跨进程状态共享）
 redis_client = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
@@ -1264,10 +1264,14 @@ async def queue_monitor_page():
                 document.getElementById('taskList').innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
             } else {
                 document.getElementById('taskList').innerHTML = tasks.map(task => {
-                    // 重试按钮条件：状态为failed + 操作说明为"点击“+”创建群" + 异常类型为ImageNotFoundException
-                    const canRetry = task.status === 'failed'
-                        && task.error_detail === '点击“+”创建群'
-                        && task.error_type === 'ImageNotFoundException';
+                    // 重试按钮条件：
+                    // 1. 状态为failed + 操作说明为"点击"+"创建群" + 异常类型为ImageNotFoundException
+                    // 2. 状态为pending + 错误信息为"队列暂停，等待恢复"
+                    const canRetry = (task.status === 'failed'
+                        && task.error_detail === '点击"+"创建群'
+                        && task.error_type === 'ImageNotFoundException')
+                        || (task.status === 'pending'
+                        && task.error_msg === '队列暂停，等待恢复');
                     return `
                     <tr>
                         <td>${task.customer_name || '-'}</td>
