@@ -1115,6 +1115,10 @@ async def api_retry_task(task_id: str):
     if not detail:
         raise HTTPException(status_code=404, detail="任务不存在")
 
+    # 检查任务是否已重试过
+    if detail.get('status') == 'retried':
+        raise HTTPException(status_code=400, detail="该任务已重试过，不可重复操作")
+
     # 获取原始配置
     config_json = detail.get('config_json')
     if not config_json:
@@ -1133,6 +1137,9 @@ async def api_retry_task(task_id: str):
         save_task_to_redis(new_task.id, group_config, 'pending')
     except Exception as e:
         logging.warning(f"保存重试任务到Redis失败（不影响任务执行）: {str(e)}")
+
+    # 更新原任务状态为 retried（已重试）
+    update_task_status(task_id, 'retried', error_msg=f'已重试，新任务ID: {new_task.id}')
 
     logging.info(f"任务重试成功: 原任务ID={task_id}, 新任务ID={new_task.id}")
 
@@ -1179,6 +1186,7 @@ async def queue_monitor_page():
         .status-running { background: #cce5ff; color: #004085; }
         .status-success { background: #d4edda; color: #155724; }
         .status-failed { background: #f8d7da; color: #721c24; }
+        .status-retried { background: #e2e3e5; color: #383d41; }
         .refresh-btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
         .refresh-btn:hover { background: #0056b3; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
@@ -1252,7 +1260,8 @@ async def queue_monitor_page():
             'pending': '等待中',
             'running': '执行中',
             'success': '成功',
-            'failed': '失败'
+            'failed': '失败',
+            'retried': '已重试'
         };
 
         // 全局变量存储任务数据
@@ -1265,11 +1274,12 @@ async def queue_monitor_page():
             } else {
                 document.getElementById('taskList').innerHTML = tasks.map(task => {
                     // 重试按钮条件：
-                    // 1. 状态为failed + 操作说明为"点击"+"创建群" + 异常类型为ImageNotFoundException
+                    // 1. 状态为failed + 操作说明为"点击"+"创建群" + 异常类型为ImageNotFoundException或TimeoutError
                     // 2. 状态为pending + 错误信息为"队列暂停，等待恢复"
+                    // 3. 状态为retried时不可重试（已经重试过）
                     const canRetry = (task.status === 'failed'
                         && task.error_detail === '点击"+"创建群'
-                        && task.error_type === 'ImageNotFoundException')
+                        && (task.error_type === 'ImageNotFoundException' || task.error_type === 'TimeoutError'))
                         || (task.status === 'pending'
                         && task.error_msg === '队列暂停，等待恢复');
                     return `
