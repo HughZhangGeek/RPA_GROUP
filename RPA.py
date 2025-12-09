@@ -44,6 +44,10 @@ MONITOR_INTERVAL = 1  # 监听间隔（秒）
 RESUME_TOKEN_EXPIRE = 3600  # 恢复token过期时间（秒），默认1小时
 TASK_RETRY_DELAY = 5  # 队列暂停时任务重试延迟（秒）
 
+# 服务器配置（用于生成外部可访问的链接）
+SERVER_HOST = '129.211.63.22'  # 修改为你的服务器实际IP地址
+SERVER_PORT = 8000
+
 # Redis连接（用于跨进程状态共享）
 redis_client = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
 QUEUE_PAUSED_KEY = 'rpa:queue_paused'  # Redis中的暂停标志key
@@ -619,8 +623,8 @@ def handle_risk_control_detection(group_config: dict = None):
     # 暂停队列并获取token
     token = pause_queue()
 
-    # 构建恢复链接
-    resume_url = f"http://127.0.0.1:8000/resume-queue?token={token}"
+    # 构建恢复链接（使用配置的服务器地址，确保外部可访问）
+    resume_url = f"http://{SERVER_HOST}:{SERVER_PORT}/resume-queue?token={token}"
 
     # 场景A：任务执行中检测到风控（从Redis读取状态）
     if is_task_running() and group_config:
@@ -943,6 +947,12 @@ def automation_task(self, group_config: dict):
         QueuePausedException: 队列暂停时抛出，触发延迟重试
     """
     task_id = self.request.id
+
+    # 检查任务是否已经完成（防止重复执行）
+    existing_status = get_task_detail(task_id)
+    if existing_status and existing_status.get('status') in ('success', 'retried'):
+        logging.info(f"任务 {task_id} 已完成（状态: {existing_status.get('status')}），跳过重复执行")
+        return
 
     # 更新任务状态为运行中
     update_task_status(task_id, 'running')
