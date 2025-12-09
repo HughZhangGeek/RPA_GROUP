@@ -826,6 +826,14 @@ def execute_workflow(group_config: dict):
                     execute_command(option, value)
 
             except Exception as e:
+                # 第一步：立即截图保存（在任何操作之前）
+                screenshot_data = None
+                try:
+                    logging.info("异常发生，立即截取当前屏幕...")
+                    screenshot_data = capture_and_encode_screenshot()
+                except Exception as screenshot_error:
+                    logging.warning(f"截图失败: {str(screenshot_error)}")
+
                 # 构建详细的错误上下文
                 error_context = {
                     '失败位置': f"第{idx + 1}条指令（共{len(command_df)}条）",
@@ -844,7 +852,7 @@ def execute_workflow(group_config: dict):
                     f"异常:{type(e).__name__} 详情:{str(e)}"
                 )
 
-                # 发送Markdown格式告警
+                # 第二步：发送Markdown格式告警
                 error_msg = f'''# <font color="warning">建群失败告警</font>
 > **客户名称:** <font color="comment">{group_config.get('客户名称', 'N/A')}</font>
 > **失败位置:** <font color="comment">第{idx + 1}条指令（共{len(command_df)}条）</font>
@@ -860,7 +868,7 @@ def execute_workflow(group_config: dict):
                     msg_type="markdown"
                 )
 
-                # 发送text消息@技术支持（Markdown不支持mentioned_mobile_list）
+                # 第三步：发送text消息@技术支持（Markdown不支持mentioned_mobile_list）
                 customer_name = group_config.get('客户名称', '未知客户')
                 tech_support_phone = group_config.get('技术支持手机号')
                 mention_text = f"{customer_name}在「{detail if detail else option}」过程中遇到问题，请对应技术支持及时处理"
@@ -872,6 +880,19 @@ def execute_workflow(group_config: dict):
                     msg_type="text",
                     mentioned_mobile_list=mention_mobiles
                 )
+
+                # 第四步：发送异常页面截图
+                if screenshot_data:
+                    try:
+                        send_wecom_robot_message(
+                            webhook_url=WECOM_WEBHOOK_URL,
+                            msg_type="image",
+                            image_base64=screenshot_data['base64'],
+                            image_md5=screenshot_data['md5']
+                        )
+                        logging.info("异常页面截图已发送到企微群")
+                    except Exception as send_error:
+                        logging.warning(f"发送截图到企微群失败: {str(send_error)}")
 
                 # 检查是否是风控导致的错误，如果队列已暂停则记录失败任务
                 if is_queue_paused():
