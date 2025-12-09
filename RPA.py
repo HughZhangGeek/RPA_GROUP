@@ -1053,6 +1053,24 @@ async def api_queue_stats():
     return get_queue_stats()
 
 
+@app.post("/api/queue/resume")
+async def api_resume_queue():
+    """
+    强制恢复队列（管理员操作，无需token）
+    用于队列监控页面的恢复按钮
+    """
+    with queue_lock:
+        # 清除Redis中的暂停标志和token
+        redis_client.delete(QUEUE_PAUSED_KEY)
+        redis_client.delete(RESUME_TOKEN_KEY)
+        logging.info("队列已通过管理页面强制恢复")
+
+    return {
+        "status": "success",
+        "message": "队列已成功恢复"
+    }
+
+
 @app.get("/api/queue/history")
 async def api_queue_history(limit: int = 50, offset: int = 0):
     """
@@ -1175,6 +1193,9 @@ async def queue_monitor_page():
         .retry-btn:hover { background: #218838; }
         .retry-btn:disabled { background: #6c757d; cursor: not-allowed; }
         .retry-btn.loading { background: #ffc107; color: #333; }
+        .resume-btn { background: #dc3545; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+        .resume-btn:hover { background: #c82333; }
+        .resume-btn:disabled { background: #6c757d; cursor: not-allowed; }
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             th, td { padding: 8px; font-size: 14px; }
@@ -1304,6 +1325,7 @@ async def queue_monitor_page():
                     <div class="stat-card ${stats.queue_paused ? 'paused' : ''}">
                         <div class="number">${stats.queue_paused ? '已暂停' : '正常'}</div>
                         <div class="label">队列状态</div>
+                        ${stats.queue_paused ? '<button class="resume-btn" onclick="resumeQueue()">恢复队列</button>' : ''}
                     </div>
                     <div class="stat-card ${stats.task_running ? 'running' : ''}">
                         <div class="number">${stats.task_running ? '是' : '否'}</div>
@@ -1378,6 +1400,43 @@ async def queue_monitor_page():
             } finally {
                 btn.disabled = false;
                 btn.classList.remove('loading');
+                btn.textContent = originalText;
+            }
+        }
+
+        // 恢复队列
+        async function resumeQueue() {
+            const btn = event.target;
+            const originalText = btn.textContent;
+
+            if (!confirm('确定要恢复队列吗？')) {
+                return;
+            }
+
+            try {
+                btn.disabled = true;
+                btn.textContent = '恢复中...';
+
+                const response = await fetch('/api/queue/resume', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('队列已成功恢复！');
+                    loadData(); // 刷新列表
+                } else {
+                    alert(`恢复失败: ${result.detail || '未知错误'}`);
+                }
+            } catch (e) {
+                console.error('恢复队列失败:', e);
+                alert('恢复队列失败，请检查网络连接');
+            } finally {
+                btn.disabled = false;
                 btn.textContent = originalText;
             }
         }
