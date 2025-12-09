@@ -51,8 +51,8 @@ RESUME_TOKEN_KEY = 'rpa:resume_token'  # Redis中的恢复token key
 TASK_RUNNING_KEY = 'rpa:task_running'  # Redis中的任务执行状态key
 TASK_HISTORY_KEY = 'rpa:task_history'  # 任务历史ID列表
 TASK_DETAIL_PREFIX = 'rpa:task:'  # 任务详情Hash前缀
-TASK_HISTORY_MAX = 100  # 保留最近100条历史记录
-TASK_DETAIL_EXPIRE = 86400 * 7  # 任务详情保留7天
+TASK_HISTORY_MAX = 500  # 保留最近500条历史记录
+TASK_DETAIL_EXPIRE = 86400 * 3  # 任务详情保留3天
 
 # 全局状态管理（仅用于FastAPI进程内部）
 queue_lock = threading.Lock()  # 队列状态锁
@@ -73,6 +73,14 @@ def is_task_running() -> bool:
 class QueuePausedException(Exception):
     """队列暂停异常，用于触发任务重试"""
     pass
+
+
+class WorkflowException(Exception):
+    """工作流执行异常，包含详细错误信息"""
+    def __init__(self, message: str, error_type: str = None, error_detail: str = None):
+        super().__init__(message)
+        self.error_type = error_type
+        self.error_detail = error_detail
 
 
 async def validate_api_key(api_key: str = Depends(api_key_header)):
@@ -491,12 +499,15 @@ def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pen
     task_data = {
         'task_id': task_id,
         'customer_name': group_config.get('客户名称', 'N/A'),
+        'owner_name': group_config.get('粘贴群主姓名', 'N/A'),
         'group_type': group_config.get('群类型', 'N/A'),
         'group_name': group_config.get('粘贴群名称', 'N/A'),
         'status': task_status,
         'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'error_msg': error_msg or '',
+        'error_type': '',
+        'error_detail': '',
         'config_json': json.dumps(group_config, ensure_ascii=False)
     }
 
@@ -512,7 +523,7 @@ def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pen
     logging.info(f"任务已保存到Redis: {task_id}, 状态: {task_status}")
 
 
-def update_task_status(task_id: str, task_status: str, error_msg: str = None):
+def update_task_status(task_id: str, task_status: str, error_msg: str = None, error_type: str = None, error_detail: str = None):
     """
     更新任务状态
 
@@ -520,6 +531,8 @@ def update_task_status(task_id: str, task_status: str, error_msg: str = None):
         task_id: 任务ID
         task_status: 新状态
         error_msg: 错误信息（可选）
+        error_type: 异常类型（可选）
+        error_detail: 操作说明（可选）
     """
     task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
     if redis_client.exists(task_key):
@@ -528,6 +541,10 @@ def update_task_status(task_id: str, task_status: str, error_msg: str = None):
         redis_client.hset(task_key, 'updated_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         if error_msg:
             redis_client.hset(task_key, 'error_msg', error_msg)
+        if error_type:
+            redis_client.hset(task_key, 'error_type', error_type)
+        if error_detail:
+            redis_client.hset(task_key, 'error_detail', error_detail)
         logging.info(f"任务状态已更新: {task_id} -> {task_status}")
 
 
@@ -872,8 +889,12 @@ def execute_workflow(group_config: dict):
                 except Exception as cleanup_error:
                     logging.warning(f"清理操作执行失败: {str(cleanup_error)}")
 
-                # 重新抛出异常以终止工作流
-                raise
+                # 重新抛出异常以终止工作流（包含异常类型和操作说明）
+                raise WorkflowException(
+                    message=str(e),
+                    error_type=type(e).__name__,
+                    error_detail=detail if detail else option
+                )
 
         logging.info("工作流执行完毕")
 
@@ -914,9 +935,19 @@ def automation_task(self, group_config: dict):
         update_task_status(task_id, 'pending', '队列暂停，等待恢复')
         logging.warning(f"队列暂停检测到，{TASK_RETRY_DELAY}秒后重试...")
         raise self.retry(exc=e, countdown=TASK_RETRY_DELAY, max_retries=None)
+    except WorkflowException as e:
+        # 工作流异常，包含详细的异常类型和操作说明
+        update_task_status(
+            task_id,
+            'failed',
+            error_msg=str(e),
+            error_type=e.error_type,
+            error_detail=e.error_detail
+        )
+        raise
     except Exception as e:
-        # 任务失败
-        update_task_status(task_id, 'failed', str(e))
+        # 其他任务失败
+        update_task_status(task_id, 'failed', str(e), error_type=type(e).__name__)
         raise
 
 
@@ -1029,6 +1060,51 @@ async def api_task_detail(task_id: str):
     return detail
 
 
+@app.post("/api/queue/task/{task_id}/retry")
+async def api_retry_task(task_id: str):
+    """
+    重试任务 - 使用原始请求配置重新提交任务
+
+    Args:
+        task_id: 原任务ID
+
+    Returns:
+        新任务ID和状态
+    """
+    # 获取原任务详情
+    detail = get_task_detail(task_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    # 获取原始配置
+    config_json = detail.get('config_json')
+    if not config_json:
+        raise HTTPException(status_code=400, detail="任务配置不存在，无法重试")
+
+    try:
+        group_config = json.loads(config_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="任务配置解析失败")
+
+    # 提交新任务
+    new_task = automation_task.delay(group_config)
+
+    # 保存新任务到Redis
+    try:
+        save_task_to_redis(new_task.id, group_config, 'pending')
+    except Exception as e:
+        logging.warning(f"保存重试任务到Redis失败（不影响任务执行）: {str(e)}")
+
+    logging.info(f"任务重试成功: 原任务ID={task_id}, 新任务ID={new_task.id}")
+
+    return {
+        "status": "任务已重新提交",
+        "original_task_id": task_id,
+        "new_task_id": new_task.id,
+        "monitor": f"/tasks/{new_task.id}"
+    }
+
+
 @app.get("/queue-monitor")
 async def queue_monitor_page():
     """队列监控页面"""
@@ -1068,9 +1144,16 @@ async def queue_monitor_page():
         .refresh-btn:hover { background: #0056b3; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
         .auto-refresh { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #666; }
-        .error-msg { color: #dc3545; font-size: 12px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .filter-bar { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; }
+        .filter-bar label { font-size: 14px; color: #333; }
+        .filter-bar select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 150px; }
+        .error-msg { color: #dc3545; font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .task-id { font-family: monospace; font-size: 12px; color: #666; }
         .empty { text-align: center; padding: 40px; color: #999; }
+        .retry-btn { background: #28a745; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .retry-btn:hover { background: #218838; }
+        .retry-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        .retry-btn.loading { background: #ffc107; color: #333; }
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             th, td { padding: 8px; font-size: 14px; }
@@ -1093,20 +1176,30 @@ async def queue_monitor_page():
 
         <div class="section">
             <h2>任务历史</h2>
+            <div class="filter-bar">
+                <label>筛选群主：</label>
+                <select id="ownerFilter" onchange="filterTasks()">
+                    <option value="">全部</option>
+                </select>
+            </div>
             <table>
                 <thead>
                     <tr>
                         <th>客户名称</th>
+                        <th>群主</th>
                         <th>群名称</th>
                         <th>群类型</th>
                         <th>状态</th>
                         <th>创建时间</th>
                         <th>更新时间</th>
+                        <th>操作说明</th>
+                        <th>异常类型</th>
                         <th>错误信息</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="taskList">
-                    <tr><td colspan="7" class="empty">加载中...</td></tr>
+                    <tr><td colspan="11" class="empty">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -1119,6 +1212,66 @@ async def queue_monitor_page():
             'success': '成功',
             'failed': '失败'
         };
+
+        // 全局变量存储任务数据
+        let allTasks = [];
+
+        // 渲染任务列表
+        function renderTasks(tasks) {
+            if (tasks.length === 0) {
+                document.getElementById('taskList').innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
+            } else {
+                document.getElementById('taskList').innerHTML = tasks.map(task => {
+                    // 重试按钮条件：状态为failed + 操作说明为"点击"+"创建群" + 异常类型为ImageNotFoundException
+                    const canRetry = task.status === 'failed'
+                        && task.error_detail === '点击"+"创建群'
+                        && task.error_type === 'ImageNotFoundException';
+                    return `
+                    <tr>
+                        <td>${task.customer_name || '-'}</td>
+                        <td>${task.owner_name || '-'}</td>
+                        <td>${task.group_name || '-'}</td>
+                        <td>${task.group_type || '-'}</td>
+                        <td><span class="status status-${task.status}">${statusMap[task.status] || task.status}</span></td>
+                        <td>${task.created_at || '-'}</td>
+                        <td>${task.updated_at || '-'}</td>
+                        <td>${task.error_detail || '-'}</td>
+                        <td>${task.error_type || '-'}</td>
+                        <td class="error-msg" title="${task.error_msg || ''}">${task.error_msg || '-'}</td>
+                        <td>
+                            <button class="retry-btn" onclick="retryTask('${task.task_id}')" ${canRetry ? '' : 'disabled'}>
+                                重试
+                            </button>
+                        </td>
+                    </tr>
+                `}).join('');
+            }
+        }
+
+        // 更新群主筛选下拉框
+        function updateOwnerFilter(tasks) {
+            const ownerFilter = document.getElementById('ownerFilter');
+            const currentValue = ownerFilter.value;
+
+            // 提取唯一的群主列表（排除空值和N/A）
+            const owners = [...new Set(tasks.map(t => t.owner_name).filter(n => n && n !== 'N/A' && n !== '-'))].sort();
+
+            // 重建下拉框选项
+            ownerFilter.innerHTML = '<option value="">全部</option>' + owners.map(owner =>
+                `<option value="${owner}" ${owner === currentValue ? 'selected' : ''}>${owner}</option>`
+            ).join('');
+        }
+
+        // 筛选任务
+        function filterTasks() {
+            const selectedOwner = document.getElementById('ownerFilter').value;
+            if (!selectedOwner) {
+                renderTasks(allTasks);
+            } else {
+                const filtered = allTasks.filter(task => task.owner_name === selectedOwner);
+                renderTasks(filtered);
+            }
+        }
 
         async function loadData() {
             try {
@@ -1154,24 +1307,17 @@ async def queue_monitor_page():
                 `;
 
                 // 获取历史
-                const historyRes = await fetch('/api/queue/history?limit=50');
+                const historyRes = await fetch('/api/queue/history?limit=500');
                 const history = await historyRes.json();
 
-                if (history.tasks.length === 0) {
-                    document.getElementById('taskList').innerHTML = '<tr><td colspan="7" class="empty">暂无任务记录</td></tr>';
-                } else {
-                    document.getElementById('taskList').innerHTML = history.tasks.map(task => `
-                        <tr>
-                            <td>${task.customer_name || '-'}</td>
-                            <td>${task.group_name || '-'}</td>
-                            <td>${task.group_type || '-'}</td>
-                            <td><span class="status status-${task.status}">${statusMap[task.status] || task.status}</span></td>
-                            <td>${task.created_at || '-'}</td>
-                            <td>${task.updated_at || '-'}</td>
-                            <td class="error-msg" title="${task.error_msg || ''}">${task.error_msg || '-'}</td>
-                        </tr>
-                    `).join('');
-                }
+                // 存储所有任务
+                allTasks = history.tasks;
+
+                // 更新群主筛选下拉框
+                updateOwnerFilter(allTasks);
+
+                // 应用当前筛选条件渲染
+                filterTasks();
             } catch (e) {
                 console.error('加载数据失败:', e);
             }
@@ -1179,6 +1325,41 @@ async def queue_monitor_page():
 
         // 初始加载
         loadData();
+
+        // 重试任务
+        async function retryTask(taskId) {
+            const btn = event.target;
+            const originalText = btn.textContent;
+
+            try {
+                btn.disabled = true;
+                btn.classList.add('loading');
+                btn.textContent = '提交中...';
+
+                const response = await fetch(`/api/queue/task/${taskId}/retry`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert(`任务已重新提交！\\n新任务ID: ${result.new_task_id}`);
+                    loadData(); // 刷新列表
+                } else {
+                    alert(`重试失败: ${result.detail || '未知错误'}`);
+                }
+            } catch (e) {
+                console.error('重试任务失败:', e);
+                alert('重试任务失败，请检查网络连接');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('loading');
+                btn.textContent = originalText;
+            }
+        }
 
         // 自动刷新
         setInterval(() => {
