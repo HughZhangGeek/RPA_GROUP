@@ -283,10 +283,13 @@ def check_image_exists(img_path: str) -> bool:
         img_path: 图像文件路径
 
     Returns:
-        bool: 当图像存在时返回True
+        bool: 当图像存在时返回True，未找到时返回False
     """
-    # return get_image_position(img_path) is not None
-    return pyautogui.locateCenterOnScreen(img_path, confidence=CONFIDENCE) is not None
+    try:
+        return pyautogui.locateCenterOnScreen(img_path, confidence=CONFIDENCE) is not None
+    except pyautogui.ImageNotFoundException:
+        # 图片未找到是正常情况，返回False
+        return False
 
 
 def activate_window(title: str, shortcut: str) -> bool:
