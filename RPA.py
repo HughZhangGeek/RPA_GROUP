@@ -1283,11 +1283,11 @@ async def queue_monitor_page():
                 document.getElementById('taskList').innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
             } else {
                 document.getElementById('taskList').innerHTML = tasks.map(task => {
-                    // 重试按钮条件（简化版）：
-                    // 1. 状态为failed + 操作说明为"点击"+"创建群"（不限制异常类型）
+                    // 重试按钮条件：
+                    // 1. 状态为failed（所有失败任务均可重试）
                     // 2. 状态为pending + 错误信息为"队列暂停，等待恢复"
                     // 3. 状态为retried时不可重试（已经重试过）
-                    const canRetry = (task.status === 'failed' && task.error_detail === '点击"+"创建群')
+                    const canRetry = task.status === 'failed'
                         || (task.status === 'pending' && task.error_msg === '队列暂停，等待恢复');
                     return `
                     <tr>
