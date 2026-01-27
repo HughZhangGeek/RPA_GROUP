@@ -1,6 +1,6 @@
 # RPA 群聊自动化管理系统
 
-基于 FastAPI + Celery + PyAutoGUI 实现的跨平台群聊自动化管理工具，支持企业微信/钉钉自动建群操作。
+基于 FastAPI + Celery + PyAutoGUI 实现的跨平台群聊自动化管理工具，支持企业微信/钉钉自动建群和群发消息操作。
 
 ## 特性
 
@@ -13,7 +13,8 @@
 - **完善日志** - 轮转日志记录，任务状态追踪
 - **自动恢复** - 风控处理后可通过链接恢复队列执行
 - **任务重试** - 支持失败任务一键重试
-- **队列监控** - Web 监控页面实时查看任务状态
+- **队列监控** - Web 监控页面实时查看任务状态（支持 Tab 切换）
+- **群发消息** - 批量向多个群发送消息，自动跳过不存在的群
 
 ## 系统架构
 
@@ -102,7 +103,7 @@ celery -A RPA:celery_app worker --loglevel=info -P solo
 
 ## API 文档
 
-### 1. 提交自动化任务
+### 1. 提交建群任务
 
 **端点**: `POST /start-automation`
 
@@ -136,7 +137,60 @@ Content-Type: application/json
 }
 ```
 
-### 2. 查询任务状态
+### 2. 提交群发消息任务
+
+**端点**: `POST /send-message`
+
+**请求头**:
+```http
+X-API-Key: eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il
+Content-Type: application/json
+```
+
+**请求体**:
+```json
+{
+  "group_configs": [
+    {
+      "客户名称": "客户A",
+      "paas_id": "paas_001",
+      "user_id": "user_001",
+      "群类型": "企微群",
+      "目标群名称": "项目沟通群",
+      "消息内容": "大家好，这是通知消息"
+    },
+    {
+      "客户名称": "客户B",
+      "paas_id": "paas_002",
+      "user_id": "user_002",
+      "群类型": "企微群",
+      "目标群名称": "售后服务群",
+      "消息内容": "这是另一条消息"
+    }
+  ]
+}
+```
+
+**响应示例**:
+```json
+{
+  "status": "任务已提交",
+  "total": 2,
+  "tasks": [
+    {"task_id": "xxx-1", "target_group": "项目沟通群"},
+    {"task_id": "xxx-2", "target_group": "售后服务群"}
+  ]
+}
+```
+
+**群发消息特性**:
+- 支持批量发送到多个群
+- 群不存在时自动跳过，记录状态为 `group_not_found`
+- 单个群失败不影响其他群的发送
+- 失败不发送企微告警，仅记录状态
+- `paas_id` 和 `user_id` 用于关联外部系统
+
+### 3. 查询任务状态
 
 **端点**: `GET /tasks/{task_id}`
 
@@ -175,25 +229,28 @@ Content-Type: application/json
 **端点**: `GET /queue-monitor`
 
 访问该端点可打开 Web 监控界面，功能包括：
-- **统计卡片** - 队列状态、任务执行中、等待中、成功、失败、队列长度
+- **Tab 切换** - 建群任务 / 群发消息 分开展示
+- **统计卡片** - 队列状态、任务执行中、等待中、成功、失败、群不存在（仅群发消息）、队列长度
 - **恢复队列按钮** - 队列暂停时显示，可强制恢复队列
-- **任务历史列表** - 显示客户名称、群主、群名称、群类型、状态、时间、操作说明、异常类型、错误信息
-- **群主筛选** - 下拉框筛选特定群主的任务
-- **重试按钮** - 满足以下条件时可用：
-  - 状态为 `failed` + 操作说明为"点击'+'创建群" + 异常类型为 `ImageNotFoundException` 或 `TimeoutError`
-  - 或状态为 `pending` + 错误信息为"队列暂停，等待恢复"
-  - 已重试任务不可再次重试
+- **任务历史列表** - 根据任务类型显示不同列
+- **筛选功能** - 建群按群主筛选，群发消息按客户筛选
+- **重试按钮** - 失败任务可一键重试
 - **自动刷新** - 默认每 5 秒自动刷新数据
 
 ### 5. 队列监控 API
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/queue/stats` | GET | 获取队列统计信息 |
+| `/api/queue/stats` | GET | 获取队列统计信息（支持 `task_type` 参数） |
 | `/api/queue/resume` | POST | 强制恢复队列（管理员，无需 token） |
-| `/api/queue/history` | GET | 获取任务历史（支持 limit/offset 参数） |
+| `/api/queue/history` | GET | 获取任务历史（支持 `limit`/`offset`/`task_type` 参数） |
 | `/api/queue/task/{task_id}` | GET | 获取单个任务详情 |
 | `/api/queue/task/{task_id}/retry` | POST | 重试失败任务 |
+
+**task_type 参数值**:
+- `create_group` - 建群任务
+- `send_message` - 群发消息任务
+- 不传 - 返回所有任务
 
 ## 任务状态说明
 
@@ -204,6 +261,7 @@ Content-Type: application/json
 | `success` | 成功完成 |
 | `failed` | 执行失败 |
 | `retried` | 已重试（原任务状态，表示已生成新任务） |
+| `group_not_found` | 群不存在（仅群发消息任务） |
 
 ## 配置说明
 
@@ -214,6 +272,8 @@ Content-Type: application/json
 **Sheet 名称**:
 - `企微建群` - 企业微信建群流程
 - `钉钉建群` - 钉钉建群流程
+- `企微发消息` - 企业微信群发消息流程
+- `钉钉发消息` - 钉钉群发消息流程
 
 **列结构**:
 | 列名 | 说明 | 示例 |
@@ -234,6 +294,7 @@ Content-Type: application/json
 | 输入 | 文本内容 | 逐字输入文本 |
 | 等待 | 2 | 等待指定秒数 |
 | 检查图片是否存在 | ./file/pictures/confirm.png | 返回布尔值 |
+| 检查群是否存在 | (无需value) | 群发消息专用，检测群不存在图片 |
 | 激活企业微信 | C:/WXWork.lnk | 激活窗口或启动快捷方式 |
 | 激活钉钉 | C:/DingTalk.lnk | 激活窗口或启动快捷方式 |
 | 滚动屏幕 | down | 模拟 Page Down 按键 |
@@ -325,11 +386,14 @@ RPA_GROUP/
 ├── requirements.txt            # 依赖列表
 ├── rpa.log                     # 运行日志
 ├── failed_tasks.log            # 失败任务日志
+├── templates/
+│   └── queue_monitor.html     # 监控页面模板
 ├── file/
 │   ├── excel/
 │   │   └── cmd.xlsx           # 指令配置文件
 │   └── pictures/
 │       ├── error.png          # 风控监听图片
+│       ├── group_not_found.png # 群不存在检测图片
 │       ├── error_shots/       # 风控截图目录
 │       └── wxwork/            # 企业微信相关图片
 └── uvicorn.log                # Web 服务日志
@@ -459,7 +523,16 @@ MIT License
 
 ## 更新日志
 
-### v4.4 (当前版本)
+### v4.5 (当前版本)
+- 新增群发消息功能（`POST /send-message`）
+- 支持批量向多个群发送消息
+- 群不存在时自动跳过，记录状态为 `group_not_found`
+- 监控页面新增 Tab 切换（建群任务 / 群发消息）
+- 监控页面模板外置到 `templates/queue_monitor.html`
+- Redis 存储配置优化：历史记录永久保存（1GB 约可存 70 万条）
+- 新增 `paas_id`、`user_id` 字段用于关联外部系统
+
+### v4.4
 - 新增服务器配置（`SERVER_HOST`/`SERVER_PORT`）：恢复链接使用可配置的外部 IP
 - 新增强制恢复队列 API（`/api/queue/resume`）：监控页面可无需 token 恢复队列
 - 新增任务重复执行防护：队列恢复后自动跳过已完成或已重试的任务

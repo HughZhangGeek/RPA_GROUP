@@ -44,6 +44,9 @@ MONITOR_INTERVAL = 1  # 监听间隔（秒）
 RESUME_TOKEN_EXPIRE = 3600  # 恢复token过期时间（秒），默认1小时
 TASK_RETRY_DELAY = 5  # 队列暂停时任务重试延迟（秒）
 
+# 发送消息配置
+GROUP_NOT_FOUND_IMAGE_PATH = './file/pictures/group_not_found.png'  # 群不存在图片路径
+
 # 服务器配置（用于生成外部可访问的链接）
 SERVER_HOST = '129.211.63.22'  # 修改为你的服务器实际IP地址
 SERVER_PORT = 8000
@@ -55,8 +58,8 @@ RESUME_TOKEN_KEY = 'rpa:resume_token'  # Redis中的恢复token key
 TASK_RUNNING_KEY = 'rpa:task_running'  # Redis中的任务执行状态key
 TASK_HISTORY_KEY = 'rpa:task_history'  # 任务历史ID列表
 TASK_DETAIL_PREFIX = 'rpa:task:'  # 任务详情Hash前缀
-TASK_HISTORY_MAX = 500  # 保留最近500条历史记录
-TASK_DETAIL_EXPIRE = 86400 * 3  # 任务详情保留3天
+TASK_HISTORY_MAX = 0  # 0 表示不限制，保留所有历史记录（1GB约可存70万条）
+TASK_DETAIL_EXPIRE = 0  # 0 表示永不过期
 
 # 全局状态管理（仅用于FastAPI进程内部）
 queue_lock = threading.Lock()  # 队列状态锁
@@ -160,6 +163,10 @@ EXCEL_PATH = "./file/excel/cmd.xlsx"  # 固定路径
 
 class GroupConfigRequest(BaseModel):
     group_config: dict  # 动态传入的配置
+
+
+class SendMessageRequest(BaseModel):
+    group_configs: List[dict]  # 多个群消息配置
 
 
 # 配置日志记录
@@ -489,19 +496,21 @@ def is_queue_paused() -> bool:
     return redis_client.get(QUEUE_PAUSED_KEY) == '1'
 
 
-def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pending', error_msg: str = None):
+def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pending', error_msg: str = None, task_type: str = 'create_group'):
     """
     保存任务详情到Redis
 
     Args:
         task_id: Celery任务ID
         group_config: 任务配置
-        task_status: 任务状态 (pending/running/success/failed)
+        task_status: 任务状态 (pending/running/success/failed/group_not_found)
         error_msg: 错误信息（失败时）
+        task_type: 任务类型 (create_group/send_message)
     """
     task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
     task_data = {
         'task_id': task_id,
+        'task_type': task_type,
         'customer_name': group_config.get('客户名称', 'N/A'),
         'owner_name': group_config.get('粘贴群主姓名', 'N/A'),
         'group_type': group_config.get('群类型', 'N/A'),
@@ -512,17 +521,25 @@ def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pen
         'error_msg': error_msg or '',
         'error_type': '',
         'error_detail': '',
-        'config_json': json.dumps(group_config, ensure_ascii=False)
+        'config_json': json.dumps(group_config, ensure_ascii=False),
+        # 发送消息任务特有字段
+        'paas_id': group_config.get('paas_id', ''),
+        'user_id': group_config.get('user_id', ''),
+        'target_group': group_config.get('目标群名称', ''),
+        'message_content': str(group_config.get('消息内容', ''))[:100],  # 截取前100字符
     }
 
     # 使用 hmset 兼容旧版本 Redis
     redis_client.hmset(task_key, task_data)
-    redis_client.expire(task_key, TASK_DETAIL_EXPIRE)
+    # 设置过期时间（0 表示永不过期）
+    if TASK_DETAIL_EXPIRE > 0:
+        redis_client.expire(task_key, TASK_DETAIL_EXPIRE)
 
     # 添加到历史列表（头部插入，保持时间倒序）
     redis_client.lpush(TASK_HISTORY_KEY, task_id)
-    # 只保留最近N条记录
-    redis_client.ltrim(TASK_HISTORY_KEY, 0, TASK_HISTORY_MAX - 1)
+    # 限制历史记录数量（0 表示不限制）
+    if TASK_HISTORY_MAX > 0:
+        redis_client.ltrim(TASK_HISTORY_KEY, 0, TASK_HISTORY_MAX - 1)
 
     logging.info(f"任务已保存到Redis: {task_id}, 状态: {task_status}")
 
@@ -559,48 +576,74 @@ def get_task_detail(task_id: str) -> dict:
     return data if data else None
 
 
-def get_task_history(limit: int = 50, offset: int = 0) -> list:
+def get_task_history(limit: int = 50, offset: int = 0, task_type: str = None) -> list:
     """
     获取任务历史列表
 
     Args:
         limit: 返回数量
         offset: 偏移量
+        task_type: 任务类型过滤 (create_group/send_message)，None表示全部
 
     Returns:
         任务详情列表
     """
-    # 获取任务ID列表
-    task_ids = redis_client.lrange(TASK_HISTORY_KEY, offset, offset + limit - 1)
+    # 获取所有任务ID（因为需要按类型过滤，所以先获取全部再过滤）
+    all_task_ids = redis_client.lrange(TASK_HISTORY_KEY, 0, -1)
 
     tasks = []
-    for task_id in task_ids:
+    skipped = 0
+    for task_id in all_task_ids:
         detail = get_task_detail(task_id)
         if detail:
+            # 按任务类型过滤
+            detail_type = detail.get('task_type', 'create_group')  # 兼容旧数据
+            if task_type and detail_type != task_type:
+                continue
+
+            # 处理分页
+            if skipped < offset:
+                skipped += 1
+                continue
+
             tasks.append(detail)
+            if len(tasks) >= limit:
+                break
 
     return tasks
 
 
-def get_queue_stats() -> dict:
-    """获取队列统计信息"""
+def get_queue_stats(task_type: str = None) -> dict:
+    """
+    获取队列统计信息
+
+    Args:
+        task_type: 任务类型过滤 (create_group/send_message)，None表示全部
+    """
     # Celery队列长度
     celery_queue_len = redis_client.llen('celery')
 
     # 统计各状态任务数量
     task_ids = redis_client.lrange(TASK_HISTORY_KEY, 0, -1)
-    stats = {'pending': 0, 'running': 0, 'success': 0, 'failed': 0}
+    stats = {'pending': 0, 'running': 0, 'success': 0, 'failed': 0, 'group_not_found': 0}
+    total_filtered = 0
 
     for task_id in task_ids:
         detail = get_task_detail(task_id)
-        if detail and detail.get('status') in stats:
-            stats[detail['status']] += 1
+        if detail:
+            # 按任务类型过滤
+            detail_type = detail.get('task_type', 'create_group')  # 兼容旧数据
+            if task_type and detail_type != task_type:
+                continue
+            total_filtered += 1
+            if detail.get('status') in stats:
+                stats[detail['status']] += 1
 
     return {
         'queue_paused': is_queue_paused(),
         'task_running': is_task_running(),
         'celery_queue_length': celery_queue_len,
-        'total_tasks': len(task_ids),
+        'total_tasks': total_filtered,
         **stats
     }
 
@@ -933,6 +976,88 @@ def execute_workflow(group_config: dict):
         logging.info("任务执行完毕（已从Redis清除执行标志）")
 
 
+def execute_send_message_workflow(message_config: dict) -> str:
+    """
+    发送消息工作流
+
+    Args:
+        message_config: 消息配置，包含目标群名称、消息内容等
+
+    Returns:
+        str: 执行结果状态 (success/group_not_found/failed)
+    """
+    # 检查队列是否暂停（从Redis读取，跨进程共享）
+    if is_queue_paused():
+        logging.warning("队列已暂停（检测到Redis标志），任务将延迟重试")
+        raise QueuePausedException("队列已暂停，任务将在队列恢复后自动重试")
+
+    # 标记任务开始执行（存储到Redis，跨进程可见）
+    set_task_running(True)
+    logging.info("发送消息任务开始执行（已标记到Redis）")
+
+    target_group = message_config.get('目标群名称', '')
+    message_content = message_config.get('消息内容', '')
+
+    try:
+        # 读取发送消息的操作序列
+        if message_config.get('群类型') == '企微群':
+            command_df = pd.read_excel(EXCEL_PATH, sheet_name='企微发消息')
+        else:
+            command_df = pd.read_excel(EXCEL_PATH, sheet_name='钉钉发消息')
+        logging.info(f"成功读取发送消息指令文件，共{len(command_df)}条指令")
+
+        # 遍历执行指令
+        for idx, cmd in command_df.iterrows():
+            option = cmd['option']
+            value = str(cmd['value'])
+            detail = str(cmd.get('detail', '')) if 'detail' in cmd and pd.notna(cmd.get('detail')) else ''
+
+            try:
+                # 特殊处理：检查群是否存在
+                if option == '检查群是否存在':
+                    logging.info(f"[{idx + 1}/{len(command_df)}] 检查群是否存在...")
+                    time.sleep(1)  # 等待搜索结果加载
+                    if check_image_exists(GROUP_NOT_FOUND_IMAGE_PATH):
+                        logging.warning(f"群 [{target_group}] 不存在，跳过发送")
+                        # 按ESC退出搜索
+                        pyautogui.press('escape')
+                        time.sleep(0.5)
+                        return 'group_not_found'
+
+                # 动态参数替换
+                elif option in message_config:
+                    actual_value = message_config[option]
+                    logging.info(f"[{idx + 1}/{len(command_df)}] 执行: {option} => {actual_value}")
+                    execute_command('粘贴', actual_value)
+                else:
+                    logging.info(f"[{idx + 1}/{len(command_df)}] 执行: {option} => {value}")
+                    execute_command(option, value)
+
+            except Exception as e:
+                logging.error(
+                    f"发送消息指令执行失败 - 位置:[{idx + 1}/{len(command_df)}] "
+                    f"操作:{option} 说明:{detail} 异常:{type(e).__name__} 详情:{str(e)}"
+                )
+                # 发送消息失败不中断队列，记录错误后返回
+                raise WorkflowException(
+                    message=str(e),
+                    error_type=type(e).__name__,
+                    error_detail=detail if detail else option
+                )
+
+        logging.info(f"消息发送成功: 群[{target_group}]")
+        return 'success'
+
+    except FileNotFoundError:
+        logging.error("发送消息指令文件不存在，路径：%s", os.path.abspath(EXCEL_PATH))
+        raise
+
+    finally:
+        # 任务结束，清除执行状态（从Redis删除）
+        set_task_running(False)
+        logging.info("发送消息任务执行完毕（已从Redis清除执行标志）")
+
+
 # Celery任务定义
 @celery_app.task(name='automation_task', bind=True, max_retries=None)
 def automation_task(self, group_config: dict):
@@ -982,6 +1107,58 @@ def automation_task(self, group_config: dict):
         raise
 
 
+@celery_app.task(name='send_message_task', bind=True, max_retries=None)
+def send_message_task(self, message_config: dict):
+    """
+    发送消息任务
+
+    Args:
+        self: Celery任务实例（bind=True时可用）
+        message_config: 消息配置
+
+    Raises:
+        QueuePausedException: 队列暂停时抛出，触发延迟重试
+    """
+    task_id = self.request.id
+
+    # 检查任务是否已经完成（防止重复执行）
+    existing_status = get_task_detail(task_id)
+    if existing_status and existing_status.get('status') in ('success', 'group_not_found', 'retried'):
+        logging.info(f"发送消息任务 {task_id} 已完成（状态: {existing_status.get('status')}），跳过重复执行")
+        return
+
+    # 更新任务状态为运行中
+    update_task_status(task_id, 'running')
+
+    try:
+        result = execute_send_message_workflow(message_config)
+        # 根据执行结果更新状态
+        if result == 'group_not_found':
+            update_task_status(task_id, 'group_not_found', error_msg='群不存在')
+        else:
+            update_task_status(task_id, 'success')
+    except QueuePausedException as e:
+        # 队列暂停，延迟重试（保持pending状态）
+        update_task_status(task_id, 'pending', '队列暂停，等待恢复')
+        logging.warning(f"队列暂停检测到，{TASK_RETRY_DELAY}秒后重试...")
+        raise self.retry(exc=e, countdown=TASK_RETRY_DELAY, max_retries=None)
+    except WorkflowException as e:
+        # 工作流异常
+        update_task_status(
+            task_id,
+            'failed',
+            error_msg=str(e),
+            error_type=e.error_type,
+            error_detail=e.error_detail
+        )
+        # 发送消息失败不抛出异常，不中断队列
+        logging.error(f"发送消息任务失败: {str(e)}")
+    except Exception as e:
+        # 其他任务失败
+        update_task_status(task_id, 'failed', str(e), error_type=type(e).__name__)
+        logging.error(f"发送消息任务异常: {str(e)}")
+
+
 # API端点
 @app.post("/start-automation", dependencies=[Depends(validate_api_key)])
 async def start_automation(request: GroupConfigRequest):
@@ -1013,6 +1190,46 @@ async def start_automation(request: GroupConfigRequest):
 async def get_task_status(task_id: str):
     task = celery_app.AsyncResult(task_id)
     return {"status": task.status, "result": task.result}
+
+
+@app.post("/send-message", dependencies=[Depends(validate_api_key)])
+async def send_message(request: SendMessageRequest):
+    """
+    发送群消息接口
+    请求体示例：
+    {
+        "group_configs": [
+            {
+                "客户名称": "xxx",
+                "paas_id": "xxxx",
+                "user_id": "xxxx",
+                "群类型": "企微群",
+                "目标群名称": "xxx",
+                "消息内容": "xxx"
+            }
+        ]
+    }
+    """
+    tasks = []
+    for config in request.group_configs:
+        task = send_message_task.delay(config)
+
+        # 保存任务到Redis（初始状态为pending，任务类型为send_message）
+        try:
+            save_task_to_redis(task.id, config, 'pending', task_type='send_message')
+        except Exception as e:
+            logging.warning(f"保存发送消息任务到Redis失败（不影响任务执行）: {str(e)}")
+
+        tasks.append({
+            "task_id": task.id,
+            "target_group": config.get('目标群名称', 'N/A')
+        })
+
+    return {
+        "status": "任务已提交",
+        "total": len(tasks),
+        "tasks": tasks
+    }
 
 
 @app.get("/resume-queue")
@@ -1058,9 +1275,14 @@ async def resume_queue_endpoint(token: str):
 # ============ 队列监控 API ============
 
 @app.get("/api/queue/stats")
-async def api_queue_stats():
-    """获取队列统计信息"""
-    return get_queue_stats()
+async def api_queue_stats(task_type: str = None):
+    """
+    获取队列统计信息
+
+    Args:
+        task_type: 任务类型过滤 (create_group/send_message)，不传表示全部
+    """
+    return get_queue_stats(task_type)
 
 
 @app.post("/api/queue/resume")
@@ -1082,18 +1304,20 @@ async def api_resume_queue():
 
 
 @app.get("/api/queue/history")
-async def api_queue_history(limit: int = 50, offset: int = 0):
+async def api_queue_history(limit: int = 50, offset: int = 0, task_type: str = None):
     """
     获取任务历史列表
 
     Args:
         limit: 返回数量（默认50）
         offset: 偏移量（默认0）
+        task_type: 任务类型过滤 (create_group/send_message)，不传表示全部
     """
-    tasks = get_task_history(limit, offset)
-    total = redis_client.llen(TASK_HISTORY_KEY)
+    tasks = get_task_history(limit, offset, task_type)
+    # 获取过滤后的总数
+    stats = get_queue_stats(task_type)
     return {
-        "total": total,
+        "total": stats['total_tasks'],
         "limit": limit,
         "offset": offset,
         "tasks": tasks
@@ -1139,12 +1363,16 @@ async def api_retry_task(task_id: str):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="任务配置解析失败")
 
-    # 提交新任务
-    new_task = automation_task.delay(group_config)
+    # 根据任务类型提交不同的任务
+    task_type = detail.get('task_type', 'create_group')
+    if task_type == 'send_message':
+        new_task = send_message_task.delay(group_config)
+    else:
+        new_task = automation_task.delay(group_config)
 
     # 保存新任务到Redis
     try:
-        save_task_to_redis(new_task.id, group_config, 'pending')
+        save_task_to_redis(new_task.id, group_config, 'pending', task_type=task_type)
     except Exception as e:
         logging.warning(f"保存重试任务到Redis失败（不影响任务执行）: {str(e)}")
 
@@ -1165,311 +1393,16 @@ async def api_retry_task(task_id: str):
 async def queue_monitor_page():
     """队列监控页面"""
     from fastapi.responses import HTMLResponse
-    html_content = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RPA 队列监控</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #333; margin-bottom: 20px; font-size: 24px; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
-        .stat-card .number { font-size: 32px; font-weight: bold; }
-        .stat-card .label { color: #666; font-size: 14px; margin-top: 5px; }
-        .stat-card.paused { background: #fff3cd; }
-        .stat-card.running { background: #d4edda; }
-        .stat-card.success .number { color: #28a745; }
-        .stat-card.failed .number { color: #dc3545; }
-        .stat-card.pending .number { color: #ffc107; }
-        .section { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .section h2 { font-size: 18px; margin-bottom: 15px; color: #333; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f8f9fa; font-weight: 600; color: #333; }
-        tr:hover { background: #f8f9fa; }
-        .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
-        .status-pending { background: #fff3cd; color: #856404; }
-        .status-running { background: #cce5ff; color: #004085; }
-        .status-success { background: #d4edda; color: #155724; }
-        .status-failed { background: #f8d7da; color: #721c24; }
-        .status-retried { background: #e2e3e5; color: #383d41; }
-        .refresh-btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
-        .refresh-btn:hover { background: #0056b3; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .auto-refresh { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #666; }
-        .filter-bar { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; }
-        .filter-bar label { font-size: 14px; color: #333; }
-        .filter-bar select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 150px; }
-        .error-msg { color: #dc3545; font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .task-id { font-family: monospace; font-size: 12px; color: #666; }
-        .empty { text-align: center; padding: 40px; color: #999; }
-        .retry-btn { background: #28a745; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-        .retry-btn:hover { background: #218838; }
-        .retry-btn:disabled { background: #6c757d; cursor: not-allowed; }
-        .retry-btn.loading { background: #ffc107; color: #333; }
-        .resume-btn { background: #dc3545; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
-        .resume-btn:hover { background: #c82333; }
-        .resume-btn:disabled { background: #6c757d; cursor: not-allowed; }
-        @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            th, td { padding: 8px; font-size: 14px; }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>RPA 拉群队列监控</h1>
-            <div class="auto-refresh">
-                <label><input type="checkbox" id="autoRefresh" checked> 自动刷新</label>
-                <button class="refresh-btn" onclick="loadData()">刷新</button>
-            </div>
-        </div>
-
-        <div class="stats-grid" id="statsGrid">
-            <div class="stat-card"><div class="number">-</div><div class="label">加载中...</div></div>
-        </div>
-
-        <div class="section">
-            <h2>任务历史</h2>
-            <div class="filter-bar">
-                <label>筛选群主：</label>
-                <select id="ownerFilter" onchange="filterTasks()">
-                    <option value="">全部</option>
-                </select>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>客户名称</th>
-                        <th>群主</th>
-                        <th>群名称</th>
-                        <th>群类型</th>
-                        <th>状态</th>
-                        <th>创建时间</th>
-                        <th>更新时间</th>
-                        <th>操作说明</th>
-                        <th>异常类型</th>
-                        <th>错误信息</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="taskList">
-                    <tr><td colspan="11" class="empty">加载中...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        const statusMap = {
-            'pending': '等待中',
-            'running': '执行中',
-            'success': '成功',
-            'failed': '失败',
-            'retried': '已重试'
-        };
-
-        // 全局变量存储任务数据
-        let allTasks = [];
-
-        // 渲染任务列表
-        function renderTasks(tasks) {
-            if (tasks.length === 0) {
-                document.getElementById('taskList').innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
-            } else {
-                document.getElementById('taskList').innerHTML = tasks.map(task => {
-                    // 重试按钮条件：
-                    // 1. 状态为failed（所有失败任务均可重试）
-                    // 2. 状态为pending + 错误信息为"队列暂停，等待恢复"
-                    // 3. 状态为retried时不可重试（已经重试过）
-                    const canRetry = task.status === 'failed'
-                        || (task.status === 'pending' && task.error_msg === '队列暂停，等待恢复');
-                    return `
-                    <tr>
-                        <td>${task.customer_name || '-'}</td>
-                        <td>${task.owner_name || '-'}</td>
-                        <td>${task.group_name || '-'}</td>
-                        <td>${task.group_type || '-'}</td>
-                        <td><span class="status status-${task.status}">${statusMap[task.status] || task.status}</span></td>
-                        <td>${task.created_at || '-'}</td>
-                        <td>${task.updated_at || '-'}</td>
-                        <td>${task.error_detail || '-'}</td>
-                        <td>${task.error_type || '-'}</td>
-                        <td class="error-msg" title="${task.error_msg || ''}">${task.error_msg || '-'}</td>
-                        <td>
-                            <button class="retry-btn" onclick="retryTask('${task.task_id}')" ${canRetry ? '' : 'disabled'}>
-                                重试
-                            </button>
-                        </td>
-                    </tr>
-                `}).join('');
-            }
-        }
-
-        // 更新群主筛选下拉框
-        function updateOwnerFilter(tasks) {
-            const ownerFilter = document.getElementById('ownerFilter');
-            const currentValue = ownerFilter.value;
-
-            // 提取唯一的群主列表（排除空值和N/A）
-            const owners = [...new Set(tasks.map(t => t.owner_name).filter(n => n && n !== 'N/A' && n !== '-'))].sort();
-
-            // 重建下拉框选项
-            ownerFilter.innerHTML = '<option value="">全部</option>' + owners.map(owner =>
-                `<option value="${owner}" ${owner === currentValue ? 'selected' : ''}>${owner}</option>`
-            ).join('');
-        }
-
-        // 筛选任务
-        function filterTasks() {
-            const selectedOwner = document.getElementById('ownerFilter').value;
-            if (!selectedOwner) {
-                renderTasks(allTasks);
-            } else {
-                const filtered = allTasks.filter(task => task.owner_name === selectedOwner);
-                renderTasks(filtered);
-            }
-        }
-
-        async function loadData() {
-            try {
-                // 获取统计
-                const statsRes = await fetch('/api/queue/stats');
-                const stats = await statsRes.json();
-
-                document.getElementById('statsGrid').innerHTML = `
-                    <div class="stat-card ${stats.queue_paused ? 'paused' : ''}">
-                        <div class="number">${stats.queue_paused ? '已暂停' : '正常'}</div>
-                        <div class="label">队列状态</div>
-                        ${stats.queue_paused ? '<button class="resume-btn" onclick="resumeQueue()">恢复队列</button>' : ''}
-                    </div>
-                    <div class="stat-card ${stats.task_running ? 'running' : ''}">
-                        <div class="number">${stats.task_running ? '是' : '否'}</div>
-                        <div class="label">任务执行中</div>
-                    </div>
-                    <div class="stat-card pending">
-                        <div class="number">${stats.pending}</div>
-                        <div class="label">等待中</div>
-                    </div>
-                    <div class="stat-card success">
-                        <div class="number">${stats.success}</div>
-                        <div class="label">成功</div>
-                    </div>
-                    <div class="stat-card failed">
-                        <div class="number">${stats.failed}</div>
-                        <div class="label">失败</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number">${stats.celery_queue_length}</div>
-                        <div class="label">队列长度</div>
-                    </div>
-                `;
-
-                // 获取历史
-                const historyRes = await fetch('/api/queue/history?limit=500');
-                const history = await historyRes.json();
-
-                // 存储所有任务
-                allTasks = history.tasks;
-
-                // 更新群主筛选下拉框
-                updateOwnerFilter(allTasks);
-
-                // 应用当前筛选条件渲染
-                filterTasks();
-            } catch (e) {
-                console.error('加载数据失败:', e);
-            }
-        }
-
-        // 初始加载
-        loadData();
-
-        // 重试任务
-        async function retryTask(taskId) {
-            const btn = event.target;
-            const originalText = btn.textContent;
-
-            try {
-                btn.disabled = true;
-                btn.classList.add('loading');
-                btn.textContent = '提交中...';
-
-                const response = await fetch(`/api/queue/task/${taskId}/retry`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    alert(`任务已重新提交！\\n新任务ID: ${result.new_task_id}`);
-                    loadData(); // 刷新列表
-                } else {
-                    alert(`重试失败: ${result.detail || '未知错误'}`);
-                }
-            } catch (e) {
-                console.error('重试任务失败:', e);
-                alert('重试任务失败，请检查网络连接');
-            } finally {
-                btn.disabled = false;
-                btn.classList.remove('loading');
-                btn.textContent = originalText;
-            }
-        }
-
-        // 恢复队列
-        async function resumeQueue() {
-            const btn = event.target;
-            const originalText = btn.textContent;
-
-            if (!confirm('确定要恢复队列吗？')) {
-                return;
-            }
-
-            try {
-                btn.disabled = true;
-                btn.textContent = '恢复中...';
-
-                const response = await fetch('/api/queue/resume', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    alert('队列已成功恢复！');
-                    loadData(); // 刷新列表
-                } else {
-                    alert(`恢复失败: ${result.detail || '未知错误'}`);
-                }
-            } catch (e) {
-                console.error('恢复队列失败:', e);
-                alert('恢复队列失败，请检查网络连接');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = originalText;
-            }
-        }
-
-        // 自动刷新
-        setInterval(() => {
-            if (document.getElementById('autoRefresh').checked) {
-                loadData();
-            }
-        }, 5000);
-    </script>
-</body>
+    # 读取外部 HTML 模板文件
+    template_path = os.path.join(os.path.dirname(__file__), 'templates', 'queue_monitor.html')
+    try:
+        with open(template_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+    except FileNotFoundError:
+        # 如果模板文件不存在，返回简单的错误页面
+        html_content = """<!DOCTYPE html>
+<html><head><title>错误</title></head>
+<body><h1>模板文件不存在</h1><p>请确保 templates/queue_monitor.html 文件存在</p></body>
 </html>"""
     return HTMLResponse(content=html_content)
 

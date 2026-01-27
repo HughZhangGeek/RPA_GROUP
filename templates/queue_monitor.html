@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPA 队列监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; font-size: 24px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+        .stat-card .number { font-size: 28px; font-weight: bold; }
+        .stat-card .label { color: #666; font-size: 12px; margin-top: 5px; }
+        .stat-card.paused { background: #fff3cd; }
+        .stat-card.running { background: #d4edda; }
+        .stat-card.success .number { color: #28a745; }
+        .stat-card.failed .number { color: #dc3545; }
+        .stat-card.pending .number { color: #ffc107; }
+        .stat-card.group-not-found .number { color: #6c757d; }
+        .section { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .section h2 { font-size: 18px; margin-bottom: 15px; color: #333; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }
+        th { background: #f8f9fa; font-weight: 600; color: #333; }
+        tr:hover { background: #f8f9fa; }
+        .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-running { background: #cce5ff; color: #004085; }
+        .status-success { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .status-retried { background: #e2e3e5; color: #383d41; }
+        .status-group_not_found { background: #e2e3e5; color: #6c757d; }
+        .refresh-btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .refresh-btn:hover { background: #0056b3; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .auto-refresh { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #666; }
+        .filter-bar { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; flex-wrap: wrap; }
+        .filter-bar label { font-size: 14px; color: #333; }
+        .filter-bar select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 150px; }
+        .error-msg { color: #dc3545; font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .msg-content { font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .task-id { font-family: monospace; font-size: 12px; color: #666; }
+        .empty { text-align: center; padding: 40px; color: #999; }
+        .retry-btn { background: #28a745; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .retry-btn:hover { background: #218838; }
+        .retry-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        .retry-btn.loading { background: #ffc107; color: #333; }
+        .resume-btn { background: #dc3545; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+        .resume-btn:hover { background: #c82333; }
+        .resume-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        /* Tab 样式 */
+        .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #dee2e6; }
+        .tab { padding: 12px 24px; cursor: pointer; border: none; background: none; font-size: 16px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+        .tab:hover { color: #333; background: #f8f9fa; }
+        .tab.active { color: #007bff; border-bottom-color: #007bff; font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+            th, td { padding: 8px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>RPA 队列监控</h1>
+            <div class="auto-refresh">
+                <label><input type="checkbox" id="autoRefresh" checked> 自动刷新</label>
+                <button class="refresh-btn" onclick="loadData()">刷新</button>
+            </div>
+        </div>
+
+        <!-- Tab 切换 -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('create_group')">建群任务</button>
+            <button class="tab" onclick="switchTab('send_message')">群发消息</button>
+        </div>
+
+        <!-- 建群任务 Tab -->
+        <div id="tab-create_group" class="tab-content active">
+            <div class="stats-grid" id="statsGrid-create_group">
+                <div class="stat-card"><div class="number">-</div><div class="label">加载中...</div></div>
+            </div>
+            <div class="section">
+                <h2>建群任务历史</h2>
+                <div class="filter-bar">
+                    <label>筛选群主：</label>
+                    <select id="ownerFilter-create_group" onchange="filterTasks('create_group')">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>客户名称</th>
+                            <th>群主</th>
+                            <th>群名称</th>
+                            <th>群类型</th>
+                            <th>状态</th>
+                            <th>创建时间</th>
+                            <th>更新时间</th>
+                            <th>操作说明</th>
+                            <th>异常类型</th>
+                            <th>错误信息</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskList-create_group">
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 群发消息 Tab -->
+        <div id="tab-send_message" class="tab-content">
+            <div class="stats-grid" id="statsGrid-send_message">
+                <div class="stat-card"><div class="number">-</div><div class="label">加载中...</div></div>
+            </div>
+            <div class="section">
+                <h2>群发消息历史</h2>
+                <div class="filter-bar">
+                    <label>筛选客户：</label>
+                    <select id="customerFilter-send_message" onchange="filterTasks('send_message')">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>客户名称</th>
+                            <th>目标群</th>
+                            <th>消息内容</th>
+                            <th>群类型</th>
+                            <th>状态</th>
+                            <th>paas_id</th>
+                            <th>user_id</th>
+                            <th>创建时间</th>
+                            <th>更新时间</th>
+                            <th>错误信息</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskList-send_message">
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusMap = {
+            'pending': '等待中',
+            'running': '执行中',
+            'success': '成功',
+            'failed': '失败',
+            'retried': '已重试',
+            'group_not_found': '群不存在'
+        };
+
+        // 当前激活的 Tab
+        let currentTab = 'create_group';
+
+        // 全局变量存储任务数据
+        let allTasks = {
+            'create_group': [],
+            'send_message': []
+        };
+
+        // 切换 Tab
+        function switchTab(tabName) {
+            currentTab = tabName;
+            // 更新 Tab 按钮样式
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            // 更新 Tab 内容显示
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(`tab-${tabName}`).classList.add('active');
+            // 加载对应数据
+            loadData();
+        }
+
+        // 渲染建群任务列表
+        function renderCreateGroupTasks(tasks) {
+            const tbody = document.getElementById('taskList-create_group');
+            if (tasks.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
+            } else {
+                tbody.innerHTML = tasks.map(task => {
+                    const canRetry = task.status === 'failed'
+                        || (task.status === 'pending' && task.error_msg === '队列暂停，等待恢复');
+                    return `
+                    <tr>
+                        <td>${task.customer_name || '-'}</td>
+                        <td>${task.owner_name || '-'}</td>
+                        <td>${task.group_name || '-'}</td>
+                        <td>${task.group_type || '-'}</td>
+                        <td><span class="status status-${task.status}">${statusMap[task.status] || task.status}</span></td>
+                        <td>${task.created_at || '-'}</td>
+                        <td>${task.updated_at || '-'}</td>
+                        <td>${task.error_detail || '-'}</td>
+                        <td>${task.error_type || '-'}</td>
+                        <td class="error-msg" title="${task.error_msg || ''}">${task.error_msg || '-'}</td>
+                        <td>
+                            <button class="retry-btn" onclick="retryTask('${task.task_id}')" ${canRetry ? '' : 'disabled'}>
+                                重试
+                            </button>
+                        </td>
+                    </tr>
+                `}).join('');
+            }
+        }
+
+        // 渲染群发消息任务列表
+        function renderSendMessageTasks(tasks) {
+            const tbody = document.getElementById('taskList-send_message');
+            if (tasks.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="11" class="empty">暂无任务记录</td></tr>';
+            } else {
+                tbody.innerHTML = tasks.map(task => {
+                    const canRetry = task.status === 'failed';
+                    return `
+                    <tr>
+                        <td>${task.customer_name || '-'}</td>
+                        <td>${task.target_group || '-'}</td>
+                        <td class="msg-content" title="${task.message_content || ''}">${task.message_content || '-'}</td>
+                        <td>${task.group_type || '-'}</td>
+                        <td><span class="status status-${task.status}">${statusMap[task.status] || task.status}</span></td>
+                        <td>${task.paas_id || '-'}</td>
+                        <td>${task.user_id || '-'}</td>
+                        <td>${task.created_at || '-'}</td>
+                        <td>${task.updated_at || '-'}</td>
+                        <td class="error-msg" title="${task.error_msg || ''}">${task.error_msg || '-'}</td>
+                        <td>
+                            <button class="retry-btn" onclick="retryTask('${task.task_id}')" ${canRetry ? '' : 'disabled'}>
+                                重试
+                            </button>
+                        </td>
+                    </tr>
+                `}).join('');
+            }
+        }
+
+        // 更新筛选下拉框
+        function updateFilters(taskType, tasks) {
+            if (taskType === 'create_group') {
+                const ownerFilter = document.getElementById('ownerFilter-create_group');
+                const currentValue = ownerFilter.value;
+                const owners = [...new Set(tasks.map(t => t.owner_name).filter(n => n && n !== 'N/A' && n !== '-'))].sort();
+                ownerFilter.innerHTML = '<option value="">全部</option>' + owners.map(owner =>
+                    `<option value="${owner}" ${owner === currentValue ? 'selected' : ''}>${owner}</option>`
+                ).join('');
+            } else {
+                const customerFilter = document.getElementById('customerFilter-send_message');
+                const currentValue = customerFilter.value;
+                const customers = [...new Set(tasks.map(t => t.customer_name).filter(n => n && n !== 'N/A' && n !== '-'))].sort();
+                customerFilter.innerHTML = '<option value="">全部</option>' + customers.map(customer =>
+                    `<option value="${customer}" ${customer === currentValue ? 'selected' : ''}>${customer}</option>`
+                ).join('');
+            }
+        }
+
+        // 筛选任务
+        function filterTasks(taskType) {
+            const tasks = allTasks[taskType];
+            let filtered = tasks;
+
+            if (taskType === 'create_group') {
+                const selectedOwner = document.getElementById('ownerFilter-create_group').value;
+                if (selectedOwner) {
+                    filtered = tasks.filter(task => task.owner_name === selectedOwner);
+                }
+                renderCreateGroupTasks(filtered);
+            } else {
+                const selectedCustomer = document.getElementById('customerFilter-send_message').value;
+                if (selectedCustomer) {
+                    filtered = tasks.filter(task => task.customer_name === selectedCustomer);
+                }
+                renderSendMessageTasks(filtered);
+            }
+        }
+
+        // 渲染统计卡片
+        function renderStats(taskType, stats) {
+            const statsGrid = document.getElementById(`statsGrid-${taskType}`);
+            let html = `
+                <div class="stat-card ${stats.queue_paused ? 'paused' : ''}">
+                    <div class="number">${stats.queue_paused ? '已暂停' : '正常'}</div>
+                    <div class="label">队列状态</div>
+                    ${stats.queue_paused ? '<button class="resume-btn" onclick="resumeQueue()">恢复队列</button>' : ''}
+                </div>
+                <div class="stat-card ${stats.task_running ? 'running' : ''}">
+                    <div class="number">${stats.task_running ? '是' : '否'}</div>
+                    <div class="label">任务执行中</div>
+                </div>
+                <div class="stat-card pending">
+                    <div class="number">${stats.pending}</div>
+                    <div class="label">等待中</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="number">${stats.success}</div>
+                    <div class="label">成功</div>
+                </div>
+                <div class="stat-card failed">
+                    <div class="number">${stats.failed}</div>
+                    <div class="label">失败</div>
+                </div>
+            `;
+
+            // 群发消息特有的"群不存在"状态
+            if (taskType === 'send_message') {
+                html += `
+                <div class="stat-card group-not-found">
+                    <div class="number">${stats.group_not_found || 0}</div>
+                    <div class="label">群不存在</div>
+                </div>
+                `;
+            }
+
+            html += `
+                <div class="stat-card">
+                    <div class="number">${stats.celery_queue_length}</div>
+                    <div class="label">队列长度</div>
+                </div>
+            `;
+
+            statsGrid.innerHTML = html;
+        }
+
+        async function loadData() {
+            try {
+                // 获取当前 Tab 的统计
+                const statsRes = await fetch(`/api/queue/stats?task_type=${currentTab}`);
+                const stats = await statsRes.json();
+                renderStats(currentTab, stats);
+
+                // 获取当前 Tab 的历史
+                const historyRes = await fetch(`/api/queue/history?limit=500&task_type=${currentTab}`);
+                const history = await historyRes.json();
+
+                // 存储任务数据
+                allTasks[currentTab] = history.tasks;
+
+                // 更新筛选下拉框
+                updateFilters(currentTab, history.tasks);
+
+                // 应用当前筛选条件渲染
+                filterTasks(currentTab);
+            } catch (e) {
+                console.error('加载数据失败:', e);
+            }
+        }
+
+        // 初始加载
+        loadData();
+
+        // 重试任务
+        async function retryTask(taskId) {
+            const btn = event.target;
+            const originalText = btn.textContent;
+
+            try {
+                btn.disabled = true;
+                btn.classList.add('loading');
+                btn.textContent = '提交中...';
+
+                const response = await fetch(`/api/queue/task/${taskId}/retry`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert(`任务已重新提交！\n新任务ID: ${result.new_task_id}`);
+                    loadData();
+                } else {
+                    alert(`重试失败: ${result.detail || '未知错误'}`);
+                }
+            } catch (e) {
+                console.error('重试任务失败:', e);
+                alert('重试任务失败，请检查网络连接');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('loading');
+                btn.textContent = originalText;
+            }
+        }
+
+        // 恢复队列
+        async function resumeQueue() {
+            const btn = event.target;
+            const originalText = btn.textContent;
+
+            if (!confirm('确定要恢复队列吗？')) {
+                return;
+            }
+
+            try {
+                btn.disabled = true;
+                btn.textContent = '恢复中...';
+
+                const response = await fetch('/api/queue/resume', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('队列已成功恢复！');
+                    loadData();
+                } else {
+                    alert(`恢复失败: ${result.detail || '未知错误'}`);
+                }
+            } catch (e) {
+                console.error('恢复队列失败:', e);
+                alert('恢复队列失败，请检查网络连接');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
+
+        // 自动刷新
+        setInterval(() => {
+            if (document.getElementById('autoRefresh').checked) {
+                loadData();
+            }
+        }, 5000);
+    </script>
+</body>
+</html>
