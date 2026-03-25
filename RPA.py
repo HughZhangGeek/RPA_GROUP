@@ -8,9 +8,8 @@ import threading
 import base64
 import hashlib
 from datetime import datetime
-import secrets
 import traceback
-
+import uuid
 import keyboard
 import pandas as pd
 import pyautogui
@@ -19,63 +18,29 @@ import pyperclip
 import uvicorn
 import requests
 import json
-import redis
-from celery import Celery
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
-
-# from functools import lru_cache
+from config import (
+    API_KEY, WECOM_WEBHOOK_URL, SERVER_HOST, SERVER_PORT,
+    RESUME_TOKEN_EXPIRE, TASK_RETRY_DELAY, MONITOR_INTERVAL,
+    ERROR_IMAGE_PATH, ERROR_SHOTS_DIR, FAILED_TASKS_LOG,
+    GROUP_NOT_FOUND_IMAGE_PATH, EXCEL_PATH,
+    CONFIDENCE, CLICK_INTERVAL, RETRY_TIMEOUT, RETRY_INTERVAL,
+)
+from database import (
+    init_db, recover_interrupted_tasks,
+    save_task, update_task_status, get_task_detail,
+    get_task_history, get_queue_stats, get_total_count,
+    pause_queue, resume_queue, is_queue_paused,
+    is_task_running, get_resume_token,
+)
+from queue_worker import start_worker
 
 # API鉴权配置
-API_KEYS = "eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il"
+API_KEYS = API_KEY
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-# 在配置区添加常量
-# WECOM_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=83a3f024-568b-4570-ac12-8d94e08be18b'
-WECOM_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=168a74ba-ec52-42dd-bb42-12dcc79a7652'
-
-# 风控监听配置
-ERROR_IMAGE_PATH = './file/pictures/error.png'  # 风控图片路径
-ERROR_SHOTS_DIR = './file/pictures/error_shots'  # 截图保存目录
-FAILED_TASKS_LOG = 'failed_tasks.log'  # 失败任务日志文件
-MONITOR_INTERVAL = 1  # 监听间隔（秒）
-RESUME_TOKEN_EXPIRE = 3600  # 恢复token过期时间（秒），默认1小时
-TASK_RETRY_DELAY = 5  # 队列暂停时任务重试延迟（秒）
-
-# 发送消息配置
-GROUP_NOT_FOUND_IMAGE_PATH = './file/pictures/group_not_found.png'  # 群不存在图片路径
-
-# 服务器配置（用于生成外部可访问的链接）
-SERVER_HOST = '129.211.63.22'  # 修改为你的服务器实际IP地址
-SERVER_PORT = 8000
-
-# Redis连接（用于跨进程状态共享）
-redis_client = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
-QUEUE_PAUSED_KEY = 'rpa:queue_paused'  # Redis中的暂停标志key
-RESUME_TOKEN_KEY = 'rpa:resume_token'  # Redis中的恢复token key
-TASK_RUNNING_KEY = 'rpa:task_running'  # Redis中的任务执行状态key
-TASK_HISTORY_KEY = 'rpa:task_history'  # 任务历史ID列表
-TASK_DETAIL_PREFIX = 'rpa:task:'  # 任务详情Hash前缀
-TASK_HISTORY_MAX = 0  # 0 表示不限制，保留所有历史记录（1GB约可存70万条）
-TASK_DETAIL_EXPIRE = 0  # 0 表示永不过期
-
-# 全局状态管理（仅用于FastAPI进程内部）
-queue_lock = threading.Lock()  # 队列状态锁
-
-
-def set_task_running(is_running: bool):
-    """设置任务执行状态到Redis"""
-    if is_running:
-        redis_client.set(TASK_RUNNING_KEY, '1')
-    else:
-        redis_client.delete(TASK_RUNNING_KEY)
-
-
-def is_task_running() -> bool:
-    """从Redis检查是否有任务在执行"""
-    return redis_client.get(TASK_RUNNING_KEY) == '1'
 # 自定义异常
 class QueuePausedException(Exception):
     """队列暂停异常，用于触发任务重试"""
@@ -147,18 +112,16 @@ async def log_requests(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     """FastAPI启动时执行"""
+    # 初始化数据库
+    init_db()
+    # 恢复上次中断的任务（running → pending）
+    recover_interrupted_tasks()
+    # 启动队列 Worker 线程
+    start_worker()
     # 启动风控监听线程（守护线程）
     monitor_thread = threading.Thread(target=monitor_risk_control_image, daemon=True)
     monitor_thread.start()
     logging.info("风控监听线程已在FastAPI启动时启动")
-
-
-# Celery配置（需安装Redis）
-celery_app = Celery('tasks', broker='redis://127.0.0.1:6379/0')
-celery_app.conf.worker_concurrency = 1  # 关键：强制串行执行
-
-# 固定Excel配置
-EXCEL_PATH = "./file/excel/cmd.xlsx"  # 固定路径
 
 
 class GroupConfigRequest(BaseModel):
@@ -191,10 +154,7 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 # 常量配置
-CONFIDENCE = 0.9  # 图像识别置信度
-CLICK_INTERVAL = 0.2  # 点击间隔(秒)
-RETRY_TIMEOUT = 10  # 图像查找超时(秒)
-RETRY_INTERVAL = 1  # 重试间隔(秒)
+# CONFIDENCE / CLICK_INTERVAL / RETRY_TIMEOUT / RETRY_INTERVAL 已从 config.py 导入
 
 
 # 操作映射表（扩展点：新增操作在此添加）
@@ -461,194 +421,9 @@ def log_failed_task(group_config: dict, error_msg: str):
         logging.error(f"记录失败任务失败: {str(e)}")
 
 
-def pause_queue():
-    """暂停队列并生成恢复token（存储在Redis中，带过期时间）"""
-    with queue_lock:
-        token = secrets.token_urlsafe(32)
-        # 存储到Redis（两个进程都能访问），设置过期时间
-        redis_client.setex(QUEUE_PAUSED_KEY, RESUME_TOKEN_EXPIRE, '1')
-        redis_client.setex(RESUME_TOKEN_KEY, RESUME_TOKEN_EXPIRE, token)
-        logging.warning(f"队列已暂停（Redis），恢复token: {token}，有效期: {RESUME_TOKEN_EXPIRE}秒")
-        return token
-
-
-def resume_queue(token: str) -> bool:
-    """恢复队列（需要验证token，从Redis读取状态）"""
-    with queue_lock:
-        stored_token = redis_client.get(RESUME_TOKEN_KEY)
-
-        # Token不存在（可能已过期）
-        if not stored_token:
-            logging.error("恢复token不存在或已过期")
-            return False
-
-        # Token验证成功
-        if token == stored_token:
-            # 清除Redis中的暂停标志和token
-            redis_client.delete(QUEUE_PAUSED_KEY)
-            redis_client.delete(RESUME_TOKEN_KEY)
-            logging.info("队列已恢复（Redis）")
-            return True
-        else:
-            logging.error("恢复token无效")
-            return False
-
-
-def is_queue_paused() -> bool:
-    """检查队列是否暂停（从Redis读取）"""
-    return redis_client.get(QUEUE_PAUSED_KEY) == '1'
-
-
-def save_task_to_redis(task_id: str, group_config: dict, task_status: str = 'pending', error_msg: str = None, task_type: str = 'create_group'):
-    """
-    保存任务详情到Redis
-
-    Args:
-        task_id: Celery任务ID
-        group_config: 任务配置
-        task_status: 任务状态 (pending/running/success/failed/group_not_found)
-        error_msg: 错误信息（失败时）
-        task_type: 任务类型 (create_group/send_message)
-    """
-    task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
-    task_data = {
-        'task_id': task_id,
-        'task_type': task_type,
-        'customer_name': group_config.get('客户名称', 'N/A'),
-        'owner_name': group_config.get('粘贴群主姓名', 'N/A'),
-        'group_type': group_config.get('群类型', 'N/A'),
-        'group_name': group_config.get('粘贴群名称', 'N/A'),
-        'status': task_status,
-        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'error_msg': error_msg or '',
-        'error_type': '',
-        'error_detail': '',
-        'config_json': json.dumps(group_config, ensure_ascii=False),
-        # 发送消息任务特有字段
-        'paas_id': group_config.get('paas_id', ''),
-        'user_id': group_config.get('user_id', ''),
-        'target_group': group_config.get('目标群名称', ''),
-        'message_content': str(group_config.get('消息内容', ''))[:100],  # 截取前100字符
-    }
-
-    # 使用 hmset 兼容旧版本 Redis
-    redis_client.hmset(task_key, task_data)
-    # 设置过期时间（0 表示永不过期）
-    if TASK_DETAIL_EXPIRE > 0:
-        redis_client.expire(task_key, TASK_DETAIL_EXPIRE)
-
-    # 添加到历史列表（头部插入，保持时间倒序）
-    redis_client.lpush(TASK_HISTORY_KEY, task_id)
-    # 限制历史记录数量（0 表示不限制）
-    if TASK_HISTORY_MAX > 0:
-        redis_client.ltrim(TASK_HISTORY_KEY, 0, TASK_HISTORY_MAX - 1)
-
-    logging.info(f"任务已保存到Redis: {task_id}, 状态: {task_status}")
-
-
-def update_task_status(task_id: str, task_status: str, error_msg: str = None, error_type: str = None, error_detail: str = None):
-    """
-    更新任务状态
-
-    Args:
-        task_id: 任务ID
-        task_status: 新状态
-        error_msg: 错误信息（可选）
-        error_type: 异常类型（可选）
-        error_detail: 操作说明（可选）
-    """
-    task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
-    if redis_client.exists(task_key):
-        # 使用单独的 hset 调用兼容旧版本 Redis
-        redis_client.hset(task_key, 'status', task_status)
-        redis_client.hset(task_key, 'updated_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        if error_msg:
-            redis_client.hset(task_key, 'error_msg', error_msg)
-        if error_type:
-            redis_client.hset(task_key, 'error_type', error_type)
-        if error_detail:
-            redis_client.hset(task_key, 'error_detail', error_detail)
-        logging.info(f"任务状态已更新: {task_id} -> {task_status}")
-
-
-def get_task_detail(task_id: str) -> dict:
-    """获取单个任务详情"""
-    task_key = f"{TASK_DETAIL_PREFIX}{task_id}"
-    data = redis_client.hgetall(task_key)
-    return data if data else None
-
-
-def get_task_history(limit: int = 50, offset: int = 0, task_type: str = None) -> list:
-    """
-    获取任务历史列表
-
-    Args:
-        limit: 返回数量
-        offset: 偏移量
-        task_type: 任务类型过滤 (create_group/send_message)，None表示全部
-
-    Returns:
-        任务详情列表
-    """
-    # 获取所有任务ID（因为需要按类型过滤，所以先获取全部再过滤）
-    all_task_ids = redis_client.lrange(TASK_HISTORY_KEY, 0, -1)
-
-    tasks = []
-    skipped = 0
-    for task_id in all_task_ids:
-        detail = get_task_detail(task_id)
-        if detail:
-            # 按任务类型过滤
-            detail_type = detail.get('task_type', 'create_group')  # 兼容旧数据
-            if task_type and detail_type != task_type:
-                continue
-
-            # 处理分页
-            if skipped < offset:
-                skipped += 1
-                continue
-
-            tasks.append(detail)
-            if len(tasks) >= limit:
-                break
-
-    return tasks
-
-
-def get_queue_stats(task_type: str = None) -> dict:
-    """
-    获取队列统计信息
-
-    Args:
-        task_type: 任务类型过滤 (create_group/send_message)，None表示全部
-    """
-    # Celery队列长度
-    celery_queue_len = redis_client.llen('celery')
-
-    # 统计各状态任务数量
-    task_ids = redis_client.lrange(TASK_HISTORY_KEY, 0, -1)
-    stats = {'pending': 0, 'running': 0, 'success': 0, 'failed': 0, 'group_not_found': 0}
-    total_filtered = 0
-
-    for task_id in task_ids:
-        detail = get_task_detail(task_id)
-        if detail:
-            # 按任务类型过滤
-            detail_type = detail.get('task_type', 'create_group')  # 兼容旧数据
-            if task_type and detail_type != task_type:
-                continue
-            total_filtered += 1
-            if detail.get('status') in stats:
-                stats[detail['status']] += 1
-
-    return {
-        'queue_paused': is_queue_paused(),
-        'task_running': is_task_running(),
-        'celery_queue_length': celery_queue_len,
-        'total_tasks': total_filtered,
-        **stats
-    }
+# pause_queue / resume_queue / is_queue_paused / update_task_status /
+# get_task_detail / get_task_history / get_queue_stats / is_task_running
+# 均已从 database.py 导入，此处无需重复定义
 
 
 def handle_risk_control_detection(group_config: dict = None):
@@ -839,16 +614,7 @@ def send_wecom_robot_message(
 
 def execute_workflow(group_config: dict):
     """新版主工作流程"""
-
-    # 检查队列是否暂停（从Redis读取，跨进程共享）
-    if is_queue_paused():
-        logging.warning("队列已暂停（检测到Redis标志），任务将延迟重试")
-        # 抛出异常让Celery重试，而不是直接返回
-        raise QueuePausedException("队列已暂停，任务将在队列恢复后自动重试")
-
-    # 标记任务开始执行（存储到Redis，跨进程可见）
-    set_task_running(True)
-    logging.info("任务开始执行（已标记到Redis）")
+    logging.info("任务开始执行")
 
     try:
         logging.info(group_config['群类型'])
@@ -973,11 +739,6 @@ def execute_workflow(group_config: dict):
         logging.error("指令文件不存在，路径：%s", os.path.abspath(EXCEL_PATH))
         raise
 
-    finally:
-        # 任务结束，清除执行状态（从Redis删除）
-        set_task_running(False)
-        logging.info("任务执行完毕（已从Redis清除执行标志）")
-
 
 def execute_send_message_workflow(message_config: dict) -> str:
     """
@@ -989,14 +750,7 @@ def execute_send_message_workflow(message_config: dict) -> str:
     Returns:
         str: 执行结果状态 (success/group_not_found/failed)
     """
-    # 检查队列是否暂停（从Redis读取，跨进程共享）
-    if is_queue_paused():
-        logging.warning("队列已暂停（检测到Redis标志），任务将延迟重试")
-        raise QueuePausedException("队列已暂停，任务将在队列恢复后自动重试")
-
-    # 标记任务开始执行（存储到Redis，跨进程可见）
-    set_task_running(True)
-    logging.info("发送消息任务开始执行（已标记到Redis）")
+    logging.info("发送消息任务开始执行")
 
     target_group = message_config.get('目标群名称', '')
     message_content = message_config.get('消息内容', '')
@@ -1055,111 +809,8 @@ def execute_send_message_workflow(message_config: dict) -> str:
         logging.error("发送消息指令文件不存在，路径：%s", os.path.abspath(EXCEL_PATH))
         raise
 
-    finally:
-        # 任务结束，清除执行状态（从Redis删除）
-        set_task_running(False)
-        logging.info("发送消息任务执行完毕（已从Redis清除执行标志）")
 
-
-# Celery任务定义
-@celery_app.task(name='automation_task', bind=True, max_retries=None)
-def automation_task(self, group_config: dict):
-    """
-    RPA自动化任务
-
-    Args:
-        self: Celery任务实例（bind=True时可用）
-        group_config: 任务配置
-
-    Raises:
-        QueuePausedException: 队列暂停时抛出，触发延迟重试
-    """
-    task_id = self.request.id
-
-    # 检查任务是否已经完成（防止重复执行）
-    existing_status = get_task_detail(task_id)
-    if existing_status and existing_status.get('status') in ('success', 'retried'):
-        logging.info(f"任务 {task_id} 已完成（状态: {existing_status.get('status')}），跳过重复执行")
-        return
-
-    # 更新任务状态为运行中
-    update_task_status(task_id, 'running')
-
-    try:
-        execute_workflow(group_config)
-        # 任务成功完成
-        update_task_status(task_id, 'success')
-    except QueuePausedException as e:
-        # 队列暂停，延迟重试（保持pending状态）
-        update_task_status(task_id, 'pending', '队列暂停，等待恢复')
-        logging.warning(f"队列暂停检测到，{TASK_RETRY_DELAY}秒后重试...")
-        raise self.retry(exc=e, countdown=TASK_RETRY_DELAY, max_retries=None)
-    except WorkflowException as e:
-        # 工作流异常，包含详细的异常类型和操作说明
-        update_task_status(
-            task_id,
-            'failed',
-            error_msg=str(e),
-            error_type=e.error_type,
-            error_detail=e.error_detail
-        )
-        raise
-    except Exception as e:
-        # 其他任务失败
-        update_task_status(task_id, 'failed', str(e), error_type=type(e).__name__)
-        raise
-
-
-@celery_app.task(name='send_message_task', bind=True, max_retries=None)
-def send_message_task(self, message_config: dict):
-    """
-    发送消息任务
-
-    Args:
-        self: Celery任务实例（bind=True时可用）
-        message_config: 消息配置
-
-    Raises:
-        QueuePausedException: 队列暂停时抛出，触发延迟重试
-    """
-    task_id = self.request.id
-
-    # 检查任务是否已经完成（防止重复执行）
-    existing_status = get_task_detail(task_id)
-    if existing_status and existing_status.get('status') in ('success', 'group_not_found', 'retried'):
-        logging.info(f"发送消息任务 {task_id} 已完成（状态: {existing_status.get('status')}），跳过重复执行")
-        return
-
-    # 更新任务状态为运行中
-    update_task_status(task_id, 'running')
-
-    try:
-        result = execute_send_message_workflow(message_config)
-        # 根据执行结果更新状态
-        if result == 'group_not_found':
-            update_task_status(task_id, 'group_not_found', error_msg='群不存在')
-        else:
-            update_task_status(task_id, 'success')
-    except QueuePausedException as e:
-        # 队列暂停，延迟重试（保持pending状态）
-        update_task_status(task_id, 'pending', '队列暂停，等待恢复')
-        logging.warning(f"队列暂停检测到，{TASK_RETRY_DELAY}秒后重试...")
-        raise self.retry(exc=e, countdown=TASK_RETRY_DELAY, max_retries=None)
-    except WorkflowException as e:
-        # 工作流异常
-        update_task_status(
-            task_id,
-            'failed',
-            error_msg=str(e),
-            error_type=e.error_type,
-            error_detail=e.error_detail
-        )
-        # 发送消息失败不抛出异常，不中断队列
-        logging.error(f"发送消息任务失败: {str(e)}")
-    except Exception as e:
-        # 其他任务失败
-        update_task_status(task_id, 'failed', str(e), error_type=type(e).__name__)
-        logging.error(f"发送消息任务异常: {str(e)}")
+# Celery 任务定义已移除，任务执行逻辑由 queue_worker.py 中的后台线程处理
 
 
 # API端点
@@ -1175,24 +826,15 @@ async def start_automation(request: GroupConfigRequest):
         }
     }
     """
-    task = automation_task.delay(request.group_config)
-
-    # 保存任务到Redis（初始状态为pending）
-    try:
-        save_task_to_redis(task.id, request.group_config, 'pending')
-    except Exception as e:
-        logging.warning(f"保存任务到Redis失败（不影响任务执行）: {str(e)}")
+    task_id = str(uuid.uuid4())
+    save_task(task_id, 'create_group', 'pending', request.group_config)
+    logging.info(f"建群任务已提交: {task_id}")
 
     return {
         "status": "任务已提交",
-        "task_id": task.id,
-        "monitor": f"/tasks/{task.id}"
+        "task_id": task_id,
+        "monitor": f"/api/queue/task/{task_id}"
     }
-
-@app.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
-    task = celery_app.AsyncResult(task_id)
-    return {"status": task.status, "result": task.result}
 
 
 @app.post("/send-message", dependencies=[Depends(validate_api_key)])
@@ -1215,16 +857,12 @@ async def send_message(request: SendMessageRequest):
     """
     tasks = []
     for config in request.group_configs:
-        task = send_message_task.delay(config)
-
-        # 保存任务到Redis（初始状态为pending，任务类型为send_message）
-        try:
-            save_task_to_redis(task.id, config, 'pending', task_type='send_message')
-        except Exception as e:
-            logging.warning(f"保存发送消息任务到Redis失败（不影响任务执行）: {str(e)}")
+        task_id = str(uuid.uuid4())
+        save_task(task_id, 'send_message', 'pending', config)
+        logging.info(f"发消息任务已提交: {task_id}")
 
         tasks.append({
-            "task_id": task.id,
+            "task_id": task_id,
             "target_group": config.get('目标群名称', 'N/A')
         })
 
@@ -1253,7 +891,7 @@ async def resume_queue_endpoint(token: str):
         )
 
     # 检查token是否存在（用于区分过期和无效）
-    stored_token = redis_client.get(RESUME_TOKEN_KEY)
+    stored_token = get_resume_token()
 
     if not stored_token:
         raise HTTPException(
@@ -1294,11 +932,8 @@ async def api_resume_queue():
     强制恢复队列（管理员操作，无需token）
     用于队列监控页面的恢复按钮
     """
-    with queue_lock:
-        # 清除Redis中的暂停标志和token
-        redis_client.delete(QUEUE_PAUSED_KEY)
-        redis_client.delete(RESUME_TOKEN_KEY)
-        logging.info("队列已通过管理页面强制恢复")
+    resume_queue(token=None)  # token=None 表示管理员强制恢复，跳过 token 验证
+    logging.info("队列已通过管理页面强制恢复")
 
     return {
         "status": "success",
@@ -1317,10 +952,9 @@ async def api_queue_history(limit: int = 50, offset: int = 0, task_type: str = N
         task_type: 任务类型过滤 (create_group/send_message)，不传表示全部
     """
     tasks = get_task_history(limit, offset, task_type)
-    # 获取过滤后的总数
-    stats = get_queue_stats(task_type)
+    total = get_total_count(task_type)
     return {
-        "total": stats['total_tasks'],
+        "total": total,
         "limit": limit,
         "offset": offset,
         "tasks": tasks
@@ -1366,29 +1000,21 @@ async def api_retry_task(task_id: str):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="任务配置解析失败")
 
-    # 根据任务类型提交不同的任务
+    # 生成新任务 ID，写入 SQLite
     task_type = detail.get('task_type', 'create_group')
-    if task_type == 'send_message':
-        new_task = send_message_task.delay(group_config)
-    else:
-        new_task = automation_task.delay(group_config)
+    new_task_id = str(uuid.uuid4())
+    save_task(new_task_id, task_type, 'pending', group_config)
 
-    # 保存新任务到Redis
-    try:
-        save_task_to_redis(new_task.id, group_config, 'pending', task_type=task_type)
-    except Exception as e:
-        logging.warning(f"保存重试任务到Redis失败（不影响任务执行）: {str(e)}")
+    # 更新原任务状态为 retried
+    update_task_status(task_id, 'retried', error_msg=f'已重试，新任务ID: {new_task_id}')
 
-    # 更新原任务状态为 retried（已重试）
-    update_task_status(task_id, 'retried', error_msg=f'已重试，新任务ID: {new_task.id}')
-
-    logging.info(f"任务重试成功: 原任务ID={task_id}, 新任务ID={new_task.id}")
+    logging.info(f"任务重试成功: 原任务ID={task_id}, 新任务ID={new_task_id}")
 
     return {
         "status": "任务已重新提交",
         "original_task_id": task_id,
-        "new_task_id": new_task.id,
-        "monitor": f"/tasks/{new_task.id}"
+        "new_task_id": new_task_id,
+        "monitor": f"/api/queue/task/{new_task_id}"
     }
 
 
