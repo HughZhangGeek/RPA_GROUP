@@ -1,0 +1,36 @@
+# 敏感配置
+.env
+config.py
+
+# 数据库文件（本地数据，不入库）
+*.db
+*.db-shm
+*.db-wal
+
+# 日志
+*.log
+*.log.*
+
+# 截图
+file/pictures/error_shots/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Windows
+Thumbs.db
+Desktop.ini

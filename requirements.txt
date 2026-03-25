@@ -1,10 +1,11 @@
-celery==5.2.7
 fastapi==0.115.12
-keyboard==0.13.5
+uvicorn==0.34.2
 pandas==2.0.3
 pyautogui==0.9.54
 pydantic==2.11.5
 PyGetWindow==0.0.9
 pyperclip==1.9.0
 Requests==2.32.3
-uvicorn==0.34.2
+keyboard==0.13.5
+pillow==10.4.0
+python-dotenv==1.0.0
