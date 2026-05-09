@@ -1,0 +1,55 @@
+### 测试发送群消息 API
+### 使用方法：在 JetBrains IDE 或 VS Code REST Client 中直接运行
+
+### ========== 单个群发送测试 ==========
+POST http://129.211.63.22:8000/send-message
+Content-Type: application/json
+X-API-Key: eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il
+
+{
+  "group_configs": [
+    {
+      "客户名称": "测试客户A",
+      "paas_id": "paas_test_001",
+      "user_id": "user_test_001",
+      "群类型": "企微群",
+      "目标群名称": "测试群名称",
+      "消息内容": "这是一条测试消息"
+    }
+  ]
+}
+
+### ========== 多个群批量发送测试 ==========
+POST http://129.211.63.22:8000/send-message
+Content-Type: application/json
+X-API-Key: eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il
+
+{
+  "group_configs": [
+    {
+      "客户名称": "客户A",
+      "paas_id": "paas_001",
+      "user_id": "user_001",
+      "群类型": "企微群",
+      "目标群名称": "rpa群发通知测试1",
+      "消息内容": "大家好，这是第一条通知消息"
+    },
+    {
+      "客户名称": "客户B",
+      "paas_id": "paas_002",
+      "user_id": "user_002",
+      "群类型": "企微群",
+      "目标群名称": "rpa群发通知测试2",
+      "消息内容": "这是第二条通知消息，内容不同"
+    },
+    {
+      "客户名称": "客户C",
+      "paas_id": "paas_003",
+      "user_id": "user_003",
+      "群类型": "企微群",
+      "目标群名称": "不存在的群名称",
+      "消息内容": "这条消息发送到不存在的群，应该返回 group_not_found 状态"
+    }
+  ]
+}
+

@@ -4,26 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-RPA 群聊自动化管理系统 - 基于 FastAPI + PyAutoGUI 的企业微信/钉钉群聊自动化工具。主要功能包括：
+RPA 群聊自动化管理系统 - 基于 FastAPI + PyAutoGUI 的企业微信/钉钉群聊自动化工具。
+
+**核心功能**：
 - **自动建群** - 自动化创建外部群
 - **群发消息** - 批量向多个群发送消息
 - **风控监听** - 实时监控风控并自动恢复
+- **队列管理** - 任务队列暂停/恢复、重试机制
+- **Web 监控** - 实时查看任务状态和历史
 
-## 启动命令
+**技术栈**：
+- **Web 框架**: FastAPI + Uvicorn
+- **RPA 自动化**: PyAutoGUI + 图像识别
+- **数据存储**: SQLite（替代 Redis）
+- **后台任务**: 自定义 Worker 线程（替代 Celery）
+- **集成**: 企业微信 Webhook 通知
 
-**双击 `start.bat` 即可**（单窗口启动，无需 Redis）
+## 快速开始
 
-```bat
-start.bat
+### Windows 用户
+
+双击 `start.bat` 即可启动服务。
+
+### Linux/Mac 用户
+
+```bash
+chmod +x start_linux.sh
+./start_linux.sh
 ```
 
-或手动启动：
-```bat
-call conda activate RPA_GROUP
+### 手动启动
+
+```bash
+# 激活 Conda 环境
+conda activate RPA_GROUP
+
+# 启动服务
 uvicorn RPA:app --host 0.0.0.0 --port 8000
 ```
 
-**诊断命令**
+**访问地址**：
+- API 文档: http://127.0.0.1:8000/docs
+- 队列监控: http://127.0.0.1:8000/queue-monitor
+
+### 诊断命令
+
 ```bash
 # 查看任务历史（SQLite）
 sqlite3 rpa.db "SELECT task_id, task_type, status, customer_name, created_at FROM tasks ORDER BY created_at DESC LIMIT 20;"

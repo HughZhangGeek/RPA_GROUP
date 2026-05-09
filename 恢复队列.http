@@ -1,0 +1,7 @@
+# curl -X POST http://localhost:8000/api/queue/resume
+#
+#    -H "X-API-Key: eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il"
+POST http://129.211.63.22:8000/api/queue/resume
+X-API-Key: eLKuNm0lwf6yohsgPOWq1GV3obPCP6Il
+
+###
