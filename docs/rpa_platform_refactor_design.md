@@ -46,6 +46,15 @@
 13. 调用简道云 API 提交/回写结果。
 14. 按团队/流程通知配置发送企微机器人通知。
 
+### 2.2.1 第一版执行边界更新
+
+第一版采用混合执行，以当前实现中的 `WECOM_APP_LAUNCH_FLOW_STEPS` 为默认流程骨架：
+
+- 简道云后台企业微信绑定页使用内部接口优先，负责搜索绑定企业、读取密文企业 ID、校验 User_ID 和最终提交绑定。
+- 企微开发者后台使用本地或自托管 `browser-use` 页面自动化，负责授权企业搜索、开始代开发应用、应用试用、使用配置、回调配置、权限设置、提交审核、待上线后提交上线。
+- 企微提交接口仅用于排障理解，不作为第一版自动执行入口。
+- 旧 `RPA.py`、旧 Excel、旧图片点击流程不作为新平台入口。
+
 ### 2.3 AI 范围
 
 - 第一版 AI 只做异常诊断，不执行点击、输入、滚动等操作。
@@ -91,7 +100,7 @@ Windows Server
 4. 人工选择或人工远程接管
 ```
 
-第一版主执行器为 Playwright。后续可扩展 UIA、PyAutoGUI/视觉识别、Computer Use 操作兜底等适配器。
+第一版企微侧主执行器为本地或自托管 `browser-use` 页面自动化；简道云绑定页优先走内部接口。后续可扩展 Playwright、UIA、PyAutoGUI/视觉识别、Computer Use 操作兜底等适配器。
 
 ## 4. 登录态设计
 
@@ -460,6 +469,17 @@ API 动作：
 - 接收 Webhook。
 - 调用简道云 API 回写。
 - 发送企微机器人通知。
+
+企微上线混合流程默认动作：
+
+- `jdy_resolve_corp`
+- `derive_wecom_urls`
+- `wecom_configure_app`
+- `jdy_check_owner`
+- `jdy_install_bind`
+- `wecom_submit_review`
+- `wecom_wait_review`
+- `wecom_submit_online`
 
 ### 8.4 暂缓到第二版
 
