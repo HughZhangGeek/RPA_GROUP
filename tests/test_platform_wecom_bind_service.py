@@ -16,9 +16,16 @@ from rpa_platform.services.wecom_bind_service import (
 
 
 class FakeJdyTransport(JdyAdminTransport):
-    def __init__(self, call_log, can_bind_corp_secret=True, install_response=None):
+    def __init__(
+        self,
+        call_log,
+        can_bind_corp_secret=True,
+        can_update_corp_secret=False,
+        install_response=None,
+    ):
         self.call_log = call_log
         self.can_bind_corp_secret = can_bind_corp_secret
+        self.can_update_corp_secret = can_update_corp_secret
         self.install_response = install_response or {"tenant_id": "user-1", "owner_id": "user-1"}
         self.calls = []
 
@@ -42,7 +49,10 @@ class FakeJdyTransport(JdyAdminTransport):
                 ],
             }
         if path == "/api/fx_sa/wxwork/get_owner":
-            return {"can_bind_corp_secret": self.can_bind_corp_secret}
+            return {
+                "can_bind_corp_secret": self.can_bind_corp_secret,
+                "can_update_corp_secret": self.can_update_corp_secret,
+            }
         if path == "/api/fx_sa/wxwork/install_corp_deploy":
             return self.install_response
         raise AssertionError("unexpected jdy path %s" % path)
@@ -122,10 +132,16 @@ class FakeWecomTransport(WecomAdminTransport):
         raise AssertionError("unexpected wecom path %s" % path)
 
 
-def make_service(call_log, can_bind_corp_secret=True, install_response=None):
+def make_service(
+    call_log,
+    can_bind_corp_secret=True,
+    can_update_corp_secret=False,
+    install_response=None,
+):
     jdy_transport = FakeJdyTransport(
         call_log,
         can_bind_corp_secret=can_bind_corp_secret,
+        can_update_corp_secret=can_update_corp_secret,
         install_response=install_response,
     )
     wecom_transport = FakeWecomTransport(call_log)
@@ -252,6 +268,21 @@ class JdyWecomBindServiceTest(unittest.TestCase):
         all_paths = [call["path"] for call in call_log]
         self.assertNotIn("/api/fx_sa/wxwork/install_corp_deploy", all_paths)
         self.assertNotIn("/wwopen/developer/customApp/tpl/corpApp", all_paths)
+
+    def test_start_bind_allows_owner_that_can_update_existing_corp_secret(self):
+        call_log = []
+        service, _jdy_transport, _wecom_transport = make_service(
+            call_log,
+            can_bind_corp_secret=False,
+            can_update_corp_secret=True,
+        )
+
+        result = service.start_bind(make_request(), now=datetime(2026, 6, 16, 10, 0, 0))
+
+        all_paths = [call["path"] for call in call_log]
+        self.assertIn("/api/fx_sa/wxwork/install_corp_deploy", all_paths)
+        self.assertIn("/wwopen/developer/customApp/tpl/corpApp", all_paths)
+        self.assertEqual(result.context["wecom"]["token"], "token-secret")
 
     def test_start_bind_rejects_empty_install_result_without_wecom_writes(self):
         call_log = []

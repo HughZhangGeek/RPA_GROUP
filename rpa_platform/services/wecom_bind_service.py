@@ -45,6 +45,7 @@ class JdyWecomBindInput:
     suite_scenario: str
     wecom_suiteid: int
     suite_name: str
+    enterprise_short_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,10 +70,14 @@ class JdyWecomBindService:
         if now is None:
             now = datetime.now()
 
-        corp = self.jdy_client.resolve_unique_corp(request.plain_corp_id, request.enterprise_name)
+        corp = self.jdy_client.resolve_unique_corp(
+            request.plain_corp_id,
+            request.enterprise_short_name or request.enterprise_name,
+        )
+        wecom_authcorp_name = request.enterprise_short_name or corp.name or request.enterprise_name
         app = self.wecom_client.resolve_unique_custom_app(
             suiteid=request.wecom_suiteid,
-            enterprise_name=request.enterprise_name,
+            enterprise_name=wecom_authcorp_name,
             suite_name=request.suite_name,
         )
         secrets_payload = self.secret_generator.generate()
@@ -85,7 +90,7 @@ class JdyWecomBindService:
             suite_id=request.suite_id,
             suite_scenario=request.suite_scenario,
         )
-        if not owner.can_bind_corp_secret:
+        if not owner.can_bind_corp_secret and not owner.can_update_corp_secret:
             raise OwnerCannotBindError("User_ID cannot bind corp secret")
 
         install = self.jdy_client.install_corp_deploy(

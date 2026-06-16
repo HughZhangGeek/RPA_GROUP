@@ -1,6 +1,6 @@
 # 简道云企微绑定完整接口链路 Runbook
 
-状态：2026-06-15 Mac 单条真实链路已走通
+状态：2026-06-16 单条真实链路已完成上线验证
 适用范围：简道云后台企业微信绑定、企业微信代开发应用配置、权限、试用、授权登录、上线提交
 非目标：不改旧 `RPA.py`，不记录 Cookie、Token、EncodingAESKey、kitsecret 等敏感明文，不覆盖线上稳定 RPA 流程
 
@@ -100,6 +100,7 @@ POST https://dc.jdydevelop.com/api/fx_sa/wxwork/get_corp_deploy_list
 - 必须唯一命中，且 `name` 与目标企业名称一致。
 - 记录 `corp_id/name/tenant_id/suite_id/suite_scenario/suite_name/integrate_suite_name`。
 - 若 `tenant_id` 与本次 `requested_user_id` 不同，记录 `original_tenant_id`，并按业务配置允许换绑后继续。
+- 企业完成绑定后，`get_corp_deploy_list` 可能用明文 CorpID、企业简称、企业全称都查不到。这不是登录态失效的充分证据，应继续用 `get_owner` 判断是否进入已绑定恢复态。
 
 ### 4.2 校验 User_ID
 
@@ -132,6 +133,18 @@ can_update_corp_secret = true
 ```
 
 这是已绑定后的正常信号。
+
+已绑定恢复态处理规则：
+
+```text
+owner.corp_id              作为 jdy.corp_secret_id 恢复
+corp.name                  作为简道云侧企业名称恢复，必须匹配企业全称或企业简称
+corp.token                 若存在，复用为 wecom.token
+corp.encoding_aes_key      若存在，复用为 wecom.encoding_aes_key
+owner_state                记录为 can_update_corp_secret
+```
+
+恢复态如果 `corp.token` 和 `corp.encoding_aes_key` 已存在，不要重新调用 `install_corp_deploy`，也不要重新生成密钥；应复用简道云已保存的密钥继续补企微侧。只有恢复态缺少既有密钥时，才按人工确认后的写入流程重新安装绑定。
 
 ### 4.3 提交绑定
 
@@ -177,6 +190,29 @@ content-type: application/json
 
 Cookie 来自企微开发者后台登录态，不记录明文。
 
+真实页面 route 口径：
+
+```text
+模板列表：#/sass/customApp/tpl/list
+模板详情：#/sass/customApp/tpl/info?id={suiteid}
+开始代开发：#/sass/customApp/app/create?suiteid={suiteid}&appid={app_id}&corpName={企业名称}
+应用详情：#/sass/customApp/app/detail?suiteid={suiteid}&appid={app_id}
+授权登录：#/sass/customApp/app/detail/sso?suiteid={suiteid}&appid={app_id}
+上线管理：#/sass/customApp/deploy/list
+上线详情：#/sass/customApp/deploy/detail?auditorderid={auditorderid}
+```
+
+企微 POST 接口需要带真实页面公共 query：
+
+```text
+lang=zh_CN
+ajax=1
+f=json
+random=0
+```
+
+缺少这些 query 时，部分真实接口可能返回“数据不存在”等页面态错误。
+
 ### 5.1 查授权企业应用
 
 ```http
@@ -210,6 +246,7 @@ x-wecom-developer-perm: 50
 - `corpapp[0].authcorp_name = enterprise_name`
 - 应用名为目标模板，例如“简道云”
 - 记录 `app_id`、`customized_app_status`、`sdk_auth.aes_app_id`
+- 真实响应可能是 `data.corpapp`，也可能是 `data.corpapp_list.corpapp`，两种结构都要兼容。
 
 待开发状态下常见值：
 
@@ -274,6 +311,30 @@ response.data.corpapp.callbackurl = wecom.callbackurl
 response.data.corpapp.redirect_domain = wxwork.jiandaoyun.com
 response.data.corpapp.sdk_auth.aes_app_id 存在
 ```
+
+响应兼容与确认规则：
+
+- 保存接口可能返回 `data.corpapp`，也可能只返回空对象或省略 `corpapp`。
+- 接口响应缺少 `corpapp` 时，不要直接重复提交；先重新读取应用列表或详情，确认 `homeurl/callbackurl/redirect_domain/token/aeskey` 是否已经写入。
+- 如果重新读取已确认字段存在，视为保存成功并继续后续权限、试用、授权登录、上线步骤。
+- 如果接口返回“数据不存在”且重新读取仍未写入，进入受控页面 fallback。
+
+受控页面 fallback：
+
+```text
+1. 打开开始代开发 route：
+   https://open.work.weixin.qq.com/wwopen/developers/tools#/sass/customApp/app/create?suiteid={suiteid}&appid={app_id}&corpName={企业名称}
+2. 从当前任务 context 填入 homeurl、callbackurl、token、aeskey、redirect_domain。
+3. 点击页面保存，让企微页面完成回调校验。
+4. 保存后立即回到只读预检，确认字段已经存在。
+5. 只读确认成功后，脚本从权限设置继续，不重复生成 token/aes，也不重复写 JDY。
+```
+
+fallback 边界：
+
+- 只用于企微开发者后台网页 `corpApp` 基础信息保存失败恢复。
+- 不属于企业微信客户端 RPA，不处理外部群创建、群发消息、弹窗或风控。
+- 不在 runbook、日志、截图、PR 描述中暴露 token/aes 明文。
 
 ### 5.3 设置权限
 
@@ -571,6 +632,7 @@ wecom_submit_online_order
 | 简道云绑定 | 非 200 或未回显 `tenant_id/owner_id` | `failed`，保留脱敏响应 |
 | 企微查应用 | 企业不唯一或 app_id 缺失 | `manual_required` |
 | 保存开发信息 | 回调校验失败 | 检查简道云密钥是否已写入、token/aeskey 是否一致 |
+| 保存开发信息 | 返回“数据不存在”且重新读取未确认字段 | 进入受控页面 fallback，保存后只读确认 |
 | 权限设置 | 企业侧授权确认未完成 | 记录状态，等待客户侧确认或人工处理 |
 | 试用规则 | `is_already_set_try_info` 非真 | 重试一次，仍失败进入 `manual_required` |
 | 授权登录域 | `redirect_domain2` 不一致 | 重试一次，仍失败进入 `manual_required` |

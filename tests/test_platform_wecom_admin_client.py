@@ -116,6 +116,38 @@ class WecomAdminClientTest(unittest.TestCase):
             },
         )
 
+    def test_resolve_unique_custom_app_accepts_real_corpapp_list_wrapper(self):
+        transport = FakeTransport(
+            [
+                {
+                    "data": {
+                        "total": 1,
+                        "corpapp_list": {
+                            "corpapp": [
+                                {
+                                    "app_id": "app-1",
+                                    "authcorp_name": "南京示例集团",
+                                    "name": "简道云",
+                                    "customized_app_status": 0,
+                                    "sdk_auth": {"aes_app_id": "aes-app-1"},
+                                }
+                            ]
+                        },
+                    }
+                }
+            ]
+        )
+
+        app = WecomAdminClient(transport).resolve_unique_custom_app(
+            suiteid=1009479,
+            enterprise_name="南京示例集团",
+            suite_name="简道云",
+        )
+
+        self.assertEqual(app.app_id, "app-1")
+        self.assertEqual(app.authcorp_name, "南京示例集团")
+        self.assertEqual(app.aes_app_id, "aes-app-1")
+
     def test_resolve_unique_custom_app_filters_authcorp_name_and_app_name(self):
         transport = FakeTransport(
             [
@@ -414,7 +446,7 @@ class WecomAdminClientTest(unittest.TestCase):
                 )
             )
 
-    def test_target_privilege_write_rejects_missing_response_privilege_list(self):
+    def test_target_privilege_write_accepts_empty_success_response(self):
         transport = FakeTransport(
             [
                 {"data": {"privilege_list": [{"id": 310000, "b_check": False}]}},
@@ -423,8 +455,9 @@ class WecomAdminClientTest(unittest.TestCase):
         )
         client = WecomAdminClient(transport)
 
-        with self.assertRaises(WecomAdminError):
-            client.set_target_privileges(suiteid=1, app_id="app-1")
+        result = client.set_target_privileges(suiteid=1, app_id="app-1")
+
+        self.assertEqual(result, [{"id": 310000, "b_check": True}])
 
     def test_target_privilege_read_rejects_missing_privilege_list_without_writing(self):
         transport = FakeTransport([{"data": {}}])

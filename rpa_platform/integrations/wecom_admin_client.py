@@ -108,6 +108,10 @@ class WecomAdminClient:
         return self._parse_custom_app(matches[0])
 
     def save_development_info(self, request: WecomSaveAppRequest) -> Dict[str, Any]:
+        response = self.save_development_info_raw(request)
+        return self._extract_corpapp(response)
+
+    def save_development_info_raw(self, request: WecomSaveAppRequest) -> Dict[str, Any]:
         corpapp = copy.deepcopy(dict(request.app.raw))
         corpapp.update(
             {
@@ -132,12 +136,11 @@ class WecomAdminClient:
                 "miniprogramInfo": {},
             }
         )
-        response = self.transport.post_json(
+        return self.transport.post_json(
             "/wwopen/developer/customApp/tpl/corpApp",
             {"suiteid": str(request.suiteid), "corpapp": corpapp},
             self._headers("/sass/customApp/app/create", "50"),
         )
-        return self._extract_corpapp(response)
 
     def set_target_privileges(self, suiteid: int, app_id: str) -> List[Dict[str, Any]]:
         headers = self._headers("/sass/customApp/app/detail", "50,51")
@@ -162,7 +165,12 @@ class WecomAdminClient:
             },
             headers,
         )
-        return self._extract_required_privilege_list(response)
+        response_privileges = self._extract_privilege_list(response)
+        if response_privileges:
+            return response_privileges
+        if isinstance(response.get("data"), dict) and not response.get("result"):
+            return patched
+        raise WecomAdminError("WeCom admin response missing data.privilege_list")
 
     def set_trial_rule(self, app_id: str) -> Dict[str, Any]:
         headers = self._headers("/sass/customApp/app/detail", "50,51")
@@ -250,6 +258,11 @@ class WecomAdminClient:
             value = nested.get("corpapp")
             if isinstance(value, list):
                 return value
+            wrapper = nested.get("corpapp_list")
+            if isinstance(wrapper, dict):
+                value = wrapper.get("corpapp")
+                if isinstance(value, list):
+                    return value
         return []
 
     @staticmethod

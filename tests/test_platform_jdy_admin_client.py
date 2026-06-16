@@ -105,7 +105,16 @@ class JdyAdminClientTest(unittest.TestCase):
     def test_check_owner_and_install_bind_use_expected_payloads(self):
         transport = FakeTransport(
             [
-                {"can_bind_corp_secret": True},
+                {
+                    "can_bind_corp_secret": True,
+                    "can_update_corp_secret": True,
+                    "owner": {"corp_id": "owner-corp-secret"},
+                    "corp": {
+                        "name": "安徽云速付",
+                        "token": "existing-token",
+                        "encoding_aes_key": "existing-aes",
+                    },
+                },
                 {"tenant_id": "user-1", "owner_id": "user-1"},
             ]
         )
@@ -125,6 +134,11 @@ class JdyAdminClientTest(unittest.TestCase):
         )
 
         self.assertTrue(owner.can_bind_corp_secret)
+        self.assertTrue(owner.can_update_corp_secret)
+        self.assertEqual(owner.owner_corp_id, "owner-corp-secret")
+        self.assertEqual(owner.corp_name, "安徽云速付")
+        self.assertEqual(owner.existing_token, "existing-token")
+        self.assertEqual(owner.existing_encoding_aes_key, "existing-aes")
         self.assertEqual(install.owner_id, "user-1")
         self.assertEqual(transport.calls[0]["path"], "/api/fx_sa/wxwork/get_owner")
         self.assertEqual(transport.calls[1]["path"], "/api/fx_sa/wxwork/install_corp_deploy")
