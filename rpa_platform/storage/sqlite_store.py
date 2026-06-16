@@ -740,6 +740,13 @@ class SQLiteStore:
                     OR (
                         status='waiting_wecom_review'
                         AND next_check_at IS NOT NULL
+                        AND next_check_at != ''
+                        AND next_check_at <= ?
+                    )
+                    OR (
+                        status='waiting_wecom_online_delay'
+                        AND next_check_at IS NOT NULL
+                        AND next_check_at != ''
                         AND next_check_at <= ?
                     )
                 ORDER BY
@@ -748,17 +755,21 @@ class SQLiteStore:
                         WHEN 'ready_to_online' THEN 2
                         WHEN 'waiting_wecom_review' THEN 3
                         WHEN 'jdy_callback_failed' THEN 4
+                        WHEN 'waiting_wecom_online_delay' THEN 5
                         ELSE 9
                     END,
                     created_at ASC
                 LIMIT 1
                 """,
-                (now_text,),
+                (now_text, now_text),
             ).fetchone()
             if task is None:
                 return None
 
-            increment_attempts = 1 if task["status"] == TaskStatus.WAITING_WECOM_REVIEW.value else 0
+            increment_attempts = 1 if task["status"] in {
+                TaskStatus.WAITING_WECOM_REVIEW.value,
+                TaskStatus.WAITING_WECOM_ONLINE_DELAY.value,
+            } else 0
             conn.execute(
                 """
                 UPDATE tasks

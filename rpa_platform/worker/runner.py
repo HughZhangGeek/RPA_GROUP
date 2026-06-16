@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from rpa_platform.domain.state_machine import TaskStatus
@@ -12,7 +13,12 @@ class FakeRunner:
         self.store = store
         self.login_checker = login_checker
 
-    def run_claimed_task(self, task_id: str, robot_id: str) -> Dict[str, Any]:
+    def run_claimed_task(
+        self,
+        task_id: str,
+        robot_id: str,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
         if self.login_checker is not None:
             outcome = self.login_checker.check_task_login(task_id, robot_id)
             if outcome.status == TaskStatus.WAITING_LOGIN:

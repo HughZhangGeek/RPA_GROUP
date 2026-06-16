@@ -52,3 +52,10 @@ WECOM_APP_LAUNCH_FLOW_STEPS = [
         "config": {"engine": "browser_use", "task_template": "wecom_submit_online_v1"},
     },
 ]
+
+
+WECOM_BIND_SERVICE_FLOW_STEPS = [
+    {"key": "jdy_wecom_bind_service", "name": "企微绑定接口服务", "action": "jdy_wecom_bind_service", "target": "service"},
+    {"key": "wecom_wait_online_delay", "name": "等待企微上线单可提交", "action": "wecom_wait_online_delay", "target": "service"},
+    {"key": "wecom_submit_online_order", "name": "企微提交上线单", "action": "wecom_submit_online_order", "target": "service"},
+]

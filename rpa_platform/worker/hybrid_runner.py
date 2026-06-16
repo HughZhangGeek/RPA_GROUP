@@ -62,6 +62,7 @@ class HybridFlowRunner:
             "corp_secret_id": row.corp_id,
             "corp_name": row.name,
             "tenant_id": row.tenant_id,
+            "original_tenant_id": row.tenant_id,
             "suite_id": row.suite_id,
             "suite_scenario": row.suite_scenario,
             "suite_name": row.suite_name,
@@ -129,7 +130,14 @@ class HybridFlowRunner:
                 suite_scenario=context["jdy"]["suite_scenario"],
             )
         )
-        output = {"install_tenant_id": result.tenant_id, "install_owner_id": result.owner_id}
+        bound_user_id = result.owner_id or result.tenant_id
+        output = {
+            "original_tenant_id": context["jdy"].get("original_tenant_id", context["jdy"].get("tenant_id", "")),
+            "requested_user_id": task["source_user_id"],
+            "install_tenant_id": result.tenant_id,
+            "install_owner_id": result.owner_id,
+            "bound_user_id": bound_user_id,
+        }
         self.store.merge_task_context(task_id, {"jdy": output})
         self.store.append_task_step(task_id, step["key"], step["name"], "success", output_data=output)
 

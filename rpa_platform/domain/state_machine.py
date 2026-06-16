@@ -14,6 +14,7 @@ class TaskStatus(str, Enum):
     WAITING_MANUAL_SELECTION = "waiting_manual_selection"
     WAITING_MANUAL_INTERVENTION = "waiting_manual_intervention"
     WAITING_WECOM_REVIEW = "waiting_wecom_review"
+    WAITING_WECOM_ONLINE_DELAY = "waiting_wecom_online_delay"
     READY_TO_ONLINE = "ready_to_online"
     WAITING_TEST_CONFIRMATION = "waiting_test_confirmation"
     JDY_CALLBACK_FAILED = "jdy_callback_failed"
@@ -45,6 +46,7 @@ ALLOWED_TASK_TRANSITIONS = {
         TaskStatus.WAITING_MANUAL_SELECTION,
         TaskStatus.WAITING_MANUAL_INTERVENTION,
         TaskStatus.WAITING_WECOM_REVIEW,
+        TaskStatus.WAITING_WECOM_ONLINE_DELAY,
         TaskStatus.READY_TO_ONLINE,
         TaskStatus.WAITING_TEST_CONFIRMATION,
         TaskStatus.JDY_CALLBACK_FAILED,
@@ -74,6 +76,14 @@ ALLOWED_TASK_TRANSITIONS = {
         TaskStatus.READY_TO_ONLINE,
         TaskStatus.WAITING_MANUAL_INTERVENTION,
         TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.WAITING_WECOM_ONLINE_DELAY: {
+        TaskStatus.CHECKING_LOGIN,
+        TaskStatus.RUNNING,
+        TaskStatus.SUCCESS,
+        TaskStatus.FAILED,
+        TaskStatus.WAITING_MANUAL_INTERVENTION,
         TaskStatus.CANCELLED,
     },
     TaskStatus.READY_TO_ONLINE: {

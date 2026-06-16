@@ -19,6 +19,9 @@ ALLOWED_ACTIONS = {
     "wecom_submit_review",
     "wecom_wait_review",
     "wecom_submit_online",
+    "jdy_wecom_bind_service",
+    "wecom_wait_online_delay",
+    "wecom_submit_online_order",
 }
 
 

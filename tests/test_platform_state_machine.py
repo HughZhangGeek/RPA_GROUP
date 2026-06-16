@@ -14,6 +14,18 @@ class TaskStateMachineTest(unittest.TestCase):
         ensure_task_transition(TaskStatus.READY_TO_ONLINE, TaskStatus.RUNNING)
         ensure_task_transition(TaskStatus.RUNNING, TaskStatus.SUCCESS)
 
+    def test_allows_waiting_wecom_online_delay_to_resume_or_finish(self):
+        ensure_task_transition(TaskStatus.RUNNING, TaskStatus.WAITING_WECOM_ONLINE_DELAY)
+        for target_status in (
+            TaskStatus.CHECKING_LOGIN,
+            TaskStatus.RUNNING,
+            TaskStatus.SUCCESS,
+            TaskStatus.FAILED,
+            TaskStatus.WAITING_MANUAL_INTERVENTION,
+            TaskStatus.CANCELLED,
+        ):
+            ensure_task_transition(TaskStatus.WAITING_WECOM_ONLINE_DELAY, target_status)
+
     def test_rejects_transition_from_terminal_success_back_to_running(self):
         with self.assertRaises(InvalidTaskTransition):
             ensure_task_transition(TaskStatus.SUCCESS, TaskStatus.RUNNING)

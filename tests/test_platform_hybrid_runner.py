@@ -126,6 +126,46 @@ class HybridFlowRunnerTest(unittest.TestCase):
         )
         self.assertEqual(json.loads(self.store.list_task_steps(self.task_id)[2]["output_json"])["review_status"], "审核中")
 
+    def test_jdy_install_bind_step_logs_original_and_bound_user_ids(self):
+        transport = FakeTransport(
+            [
+                {
+                    "has_more": False,
+                    "corp_deploy_list": [
+                        {
+                            "corp_id": "corp-secret",
+                            "name": "安徽云速付",
+                            "tenant_id": "old-user",
+                            "suite_name": "简道云",
+                            "integrate_suite_name": "简道云",
+                            "suite_id": 1,
+                            "suite_scenario": "main",
+                        }
+                    ],
+                },
+                {"can_bind_corp_secret": True},
+                {"tenant_id": "user-1", "owner_id": "user-1"},
+            ]
+        )
+        runner = HybridFlowRunner(
+            store=self.store,
+            jdy_client=JdyAdminClient(transport),
+            wecom_rpa=FakeWecomRpa(),
+        )
+
+        runner.run_claimed_task(self.task_id, self.robot_id)
+
+        steps = self.store.list_task_steps(self.task_id)
+        resolve_output = json.loads(steps[0]["output_json"])
+        install_output = json.loads(steps[4]["output_json"])
+        context = self.store.get_task_context(self.task_id)
+        self.assertEqual(resolve_output["original_tenant_id"], "old-user")
+        self.assertEqual(install_output["original_tenant_id"], "old-user")
+        self.assertEqual(install_output["requested_user_id"], "user-1")
+        self.assertEqual(install_output["bound_user_id"], "user-1")
+        self.assertEqual(context["jdy"]["original_tenant_id"], "old-user")
+        self.assertEqual(context["jdy"]["bound_user_id"], "user-1")
+
     def test_reviewing_status_keeps_waiting_review_with_next_check(self):
         self.store.set_task_status(self.task_id, TaskStatus.WAITING_WECOM_REVIEW)
         self.store.merge_task_context(self.task_id, {"wecom": {"review_status": "审核中"}})

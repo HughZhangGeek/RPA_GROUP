@@ -93,6 +93,28 @@ class FlowStepValidationTest(unittest.TestCase):
         self.assertEqual(steps[-1]["key"], "wecom_submit_online")
         self.assertEqual([step["action"] for step in steps], [step["action"] for step in WECOM_APP_LAUNCH_FLOW_STEPS])
 
+    def test_default_wecom_bind_service_flow_steps_validate_with_allowlist(self):
+        from rpa_platform.domain.default_flows import WECOM_BIND_SERVICE_FLOW_STEPS
+
+        steps = validate_steps(WECOM_BIND_SERVICE_FLOW_STEPS, enforce_action_allowlist=True)
+
+        self.assertEqual(
+            [step["key"] for step in steps],
+            [
+                "jdy_wecom_bind_service",
+                "wecom_wait_online_delay",
+                "wecom_submit_online_order",
+            ],
+        )
+        self.assertEqual(
+            [step["action"] for step in steps],
+            [
+                "jdy_wecom_bind_service",
+                "wecom_wait_online_delay",
+                "wecom_submit_online_order",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
