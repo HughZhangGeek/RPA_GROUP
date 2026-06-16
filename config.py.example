@@ -1,0 +1,38 @@
+"""
+配置文件模板
+复制此文件为 config.py 并根据实际情况修改
+"""
+import os
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
+
+# ==================== API 认证 ====================
+API_KEY = os.getenv('API_KEY', 'your_secret_api_key_here')
+
+# ==================== 企业微信配置 ====================
+WECOM_WEBHOOK_URL = os.getenv('WECOM_WEBHOOK_URL', '')
+
+# ==================== 服务器配置 ====================
+SERVER_HOST = os.getenv('SERVER_HOST', '127.0.0.1')
+SERVER_PORT = int(os.getenv('SERVER_PORT', 8000))
+
+# ==================== 队列配置 ====================
+RESUME_TOKEN_EXPIRE = int(os.getenv('RESUME_TOKEN_EXPIRE', 3600))
+TASK_RETRY_DELAY = int(os.getenv('TASK_RETRY_DELAY', 5))
+MONITOR_INTERVAL = int(os.getenv('MONITOR_INTERVAL', 1))
+
+# ==================== 数据库配置 ====================
+DB_PATH = os.getenv('DB_PATH', './rpa.db')
+
+# ==================== 图像识别配置 ====================
+# 图像识别置信度（0.0-1.0）
+# 如果识别失败，可以降低到 0.8
+CONFIDENCE = 0.9
+
+# 点击间隔（秒）
+CLICK_INTERVAL = 0.2
+
+# 重试超时（秒）
+RETRY_TIMEOUT = 10
