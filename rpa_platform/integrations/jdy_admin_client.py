@@ -43,6 +43,11 @@ class JdyCorpDeploySearchResult:
 @dataclass(frozen=True)
 class JdyOwnerCheckResult:
     can_bind_corp_secret: bool
+    can_update_corp_secret: bool = False
+    owner_corp_id: str = ""
+    corp_name: str = ""
+    existing_token: str = ""
+    existing_encoding_aes_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,7 +104,20 @@ class JdyAdminClient:
             "/api/fx_sa/wxwork/get_owner",
             {"user_id": user_id, "suite_id": suite_id, "suite_scenario": suite_scenario},
         )
-        return JdyOwnerCheckResult(can_bind_corp_secret=bool(data.get("can_bind_corp_secret")))
+        owner = data.get("owner")
+        if not isinstance(owner, dict):
+            owner = {}
+        corp = data.get("corp")
+        if not isinstance(corp, dict):
+            corp = {}
+        return JdyOwnerCheckResult(
+            can_bind_corp_secret=bool(data.get("can_bind_corp_secret")),
+            can_update_corp_secret=bool(data.get("can_update_corp_secret")),
+            owner_corp_id=str(owner.get("corp_id", "")),
+            corp_name=str(corp.get("name", "")),
+            existing_token=str(corp.get("token", "")),
+            existing_encoding_aes_key=str(corp.get("encoding_aes_key", "")),
+        )
 
     def install_corp_deploy(self, request: JdyInstallRequest) -> JdyInstallResult:
         payload = {

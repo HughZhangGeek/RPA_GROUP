@@ -71,6 +71,22 @@ class TaskContextStoreTest(unittest.TestCase):
         self.assertEqual(redacted["encoding_aes_key"], "***")
         self.assertEqual(redacted["safe"], "安徽云速付")
 
+    def test_redact_context_masks_corp_secret_id_inside_wecom_urls(self):
+        redacted = redact_context(
+            {
+                "jdy": {"corp_secret_id": "corp-secret-from-owner"},
+                "wecom": {
+                    "homeurl": "https://wxwork.jiandaoyun.com/wxwork/corp-secret-from-owner/dashboard",
+                    "callbackurl": "https://wxwork.jiandaoyun.com/wxwork/corp/corp-secret-from-owner/service",
+                },
+            }
+        )
+        serialized = str(redacted)
+
+        self.assertNotIn("corp-secret-from-owner", serialized)
+        self.assertIn("corp***wner", redacted["wecom"]["homeurl"])
+        self.assertIn("corp***wner", redacted["wecom"]["callbackurl"])
+
     def test_set_task_current_step_updates_task_pointer(self):
         self.store.set_task_current_step(self.task_id, "jdy_resolve_corp")
 

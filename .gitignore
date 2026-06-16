@@ -10,6 +10,7 @@ config.py
 # 日志
 *.log
 *.log.*
+.local/
 
 # 截图
 file/pictures/error_shots/
