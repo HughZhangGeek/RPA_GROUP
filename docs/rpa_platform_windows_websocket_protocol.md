@@ -591,6 +591,12 @@ jdycsm 配置页点击“开始拾取”
 - jdycsm 只保存状态、步骤、错误和 artifact 索引。
 - 业务同学只能使用已发布模板发起测试或生产任务，不能直接编辑高级 selector。
 
+### 9.5 当前 Runner 骨架状态
+
+`WecomCreateGroupRunner` 当前只是模板执行骨架，用于打通企微客户端建群 runner 的代码入口和测试边界。它在 fake UIA driver 下支持 `click_element` 和 `set_text` 两类动作：`click_element` 将 UIA target 交给 driver 点击，`set_text` 从任务 payload 读取 `value_from` 指定字段后写入目标元素。
+
+这个骨架尚未完成真实企业微信客户端自动建群，不包含窗口激活、成员搜索选择、创建确认、失败截图、artifact 索引、真实 UIA driver 适配和端到端副作用保护。
+
 ## 10. artifact 策略
 
 第一版只上传索引，不上传原始截图和日志：
