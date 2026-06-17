@@ -60,7 +60,7 @@ class WorkerWebSocketClient:
             )
         )
 
-    def receive_once(self, dispatch_handler: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def receive_once(self, dispatch_handler: Callable[[Dict[str, Any]], Any]) -> Optional[Dict[str, Any]]:
         raw = self.transport.receive_json()
         if raw is None:
             return None
@@ -69,6 +69,12 @@ class WorkerWebSocketClient:
             return envelope
         payload = envelope["payload"]
         handler_result = dispatch_handler(payload)
+        if not isinstance(handler_result, dict):
+            handler_result = {
+                "accepted": False,
+                "local_execution_id": None,
+                "reject_reason": "handler_result_missing",
+            }
         self.transport.send_json(
             self._envelope(
                 "task.ack",

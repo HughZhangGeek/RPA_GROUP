@@ -69,3 +69,44 @@ class WorkerWebSocketClientTest(unittest.TestCase):
         self.assertEqual(handled[0]["task_id"], "task-001")
         self.assertEqual(transport.sent[0]["type"], "task.ack")
         self.assertTrue(transport.sent[0]["payload"]["accepted"])
+
+    def test_dispatch_handler_missing_result_sends_reject_ack(self):
+        transport = FakeTransport(
+            incoming=[
+                {
+                    "type": "task.dispatch",
+                    "message_id": "msg-dispatch",
+                    "sent_at": "2026-06-17T10:01:00+08:00",
+                    "machine_id": "mch-001",
+                    "robot_id": "windows-rpa-01",
+                    "payload": {
+                        "task_id": "task-001",
+                        "idempotency_key": "wecom_bind_service:ww001:user-1",
+                        "flow_type": "wecom_bind_service",
+                        "requested_capability": "wecom_bind_service",
+                        "task_payload": {},
+                        "runtime_context": {},
+                    },
+                }
+            ]
+        )
+        handled = []
+        client = WorkerWebSocketClient(
+            transport=transport,
+            machine_id="mch-001",
+            robot_id="windows-rpa-01",
+            hostname="WIN-RPA-01",
+            service_version="0.1.0",
+            capabilities={"wecom_bind_service": True},
+        )
+
+        try:
+            client.receive_once(lambda task: handled.append(task))
+        except Exception as exc:
+            self.fail("receive_once should send reject ack when handler returns None: %r" % exc)
+
+        self.assertEqual(handled[0]["task_id"], "task-001")
+        self.assertEqual(transport.sent[0]["type"], "task.ack")
+        self.assertFalse(transport.sent[0]["payload"]["accepted"])
+        self.assertIsNone(transport.sent[0]["payload"]["local_execution_id"])
+        self.assertEqual(transport.sent[0]["payload"]["reject_reason"], "handler_result_missing")
