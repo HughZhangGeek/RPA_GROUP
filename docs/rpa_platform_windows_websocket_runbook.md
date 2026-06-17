@@ -367,7 +367,13 @@ wecom_client_rpa_create_group
 
 ### 8.3 元素拾取器
 
-第一版不要求打包 exe。Windows worker 增加 picker 模式即可：
+当前仓库只新增元素拾取器骨架，不要求打包 exe，也还没有真实 UIA 驱动或可运行的本地 picker CLI。骨架边界：
+
+- `element_picker.build_selector_from_element()` 负责把 UIA 元素元数据转换成 selector。
+- `uia_driver.UiaDriver` 只定义 `find_element`、`click_element`、`set_text` 协议接口。
+- 后续 Windows 本地模式再接入真实 UIA 库、快捷键监听、截图索引和 WebSocket 回传。
+
+后续 picker CLI 形态可以是：
 
 ```powershell
 python -m rpa_platform.worker.element_picker --env C:\rpa_group\config\worker.env
@@ -513,8 +519,8 @@ heartbeat 超过 45 秒未更新
 - `rpa_platform/worker/runner.py`：runner 协议。
 - `rpa_platform/worker/wecom_bind_runner.py`：企微绑定接口服务 runner。
 - `rpa_platform/worker/wecom_client_runner.py`：建议新增的企微客户端建群 runner。
-- `rpa_platform/worker/uia_driver.py`：建议新增的 Windows UIA 元素执行适配器。
-- `rpa_platform/worker/element_picker.py`：建议新增的元素拾取器。
+- `rpa_platform/worker/uia_driver.py`：Windows UIA 元素执行适配器协议骨架，尚未接入真实驱动。
+- `rpa_platform/worker/element_picker.py`：元素拾取器 selector 构造骨架，尚未提供可运行 picker CLI。
 - `rpa_platform/storage/sqlite_store.py`：任务、机器人、幂等键、步骤和 artifact 存储。
 - `rpa_platform/worker/diagnostics.py`：建议新增的 Windows 只读诊断摘要模块。
 - `scripts/dev/run_platform_worker_once.py`：本地一次性 worker 验证。
