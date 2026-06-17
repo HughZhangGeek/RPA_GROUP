@@ -1,6 +1,10 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from rpa_platform.worker.websocket_client import WorkerWebSocketClient
+from rpa_platform.worker.websocket_worker import load_worker_config
 
 
 class FakeTransport:
@@ -110,3 +114,27 @@ class WorkerWebSocketClientTest(unittest.TestCase):
         self.assertFalse(transport.sent[0]["payload"]["accepted"])
         self.assertIsNone(transport.sent[0]["payload"]["local_execution_id"])
         self.assertEqual(transport.sent[0]["payload"]["reject_reason"], "handler_result_missing")
+
+
+class WorkerConfigTest(unittest.TestCase):
+    def test_loads_worker_env_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / "worker.env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "RPA_WS_URL=wss://jdycsm.example.com/rpa/ws/worker",
+                        "RPA_MACHINE_TOKEN=secret-token",
+                        "RPA_ROBOT_ID=windows-rpa-01",
+                        "RPA_DB_PATH=C:/rpa_group/data/platform-worker.db",
+                        "RPA_MACHINE_CONFIG=C:/rpa_group/config/machine.json",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_worker_config(env_path)
+
+            self.assertEqual(config.ws_url, "wss://jdycsm.example.com/rpa/ws/worker")
+            self.assertEqual(config.robot_id, "windows-rpa-01")
+            self.assertEqual(config.db_path, "C:/rpa_group/data/platform-worker.db")
