@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 SENSITIVE_FIELD_NAMES = {
+    "api-key",
     "api_key",
     "authorization",
     "cookie",
@@ -23,7 +24,7 @@ SENSITIVE_FIELD_NAMES = {
 REDACTION_PATTERNS = (
     re.compile(r"Authorization:\s*Bearer\s+[^\s,;]+", re.IGNORECASE),
     re.compile(r"\bBearer\s+[^\s,;]+", re.IGNORECASE),
-    re.compile(r"\b(token|secret|password|api_key)=([^\s&;,]+)", re.IGNORECASE),
+    re.compile(r"([\"']?\b(?:token|secret|password|api[_-]key)[\"']?\s*[:=]\s*[\"']?)([^\"'\s&;,}]+)([\"']?)", re.IGNORECASE),
 )
 
 MAX_ERROR_MESSAGE_LENGTH = 500
@@ -55,7 +56,7 @@ def _redact_string(value: str) -> str:
     redacted = value
     redacted = REDACTION_PATTERNS[0].sub("Authorization: Bearer [REDACTED]", redacted)
     redacted = REDACTION_PATTERNS[1].sub("Bearer [REDACTED]", redacted)
-    redacted = REDACTION_PATTERNS[2].sub(lambda match: "%s=[REDACTED]" % match.group(1), redacted)
+    redacted = REDACTION_PATTERNS[2].sub(lambda match: "%s[REDACTED]%s" % (match.group(1), match.group(3)), redacted)
     if len(redacted) > MAX_ERROR_MESSAGE_LENGTH:
         return redacted[:MAX_ERROR_MESSAGE_LENGTH] + "...[truncated]"
     return redacted

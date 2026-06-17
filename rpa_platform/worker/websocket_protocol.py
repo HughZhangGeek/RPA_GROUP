@@ -3,15 +3,21 @@ from typing import Any, Dict, Optional
 
 
 SENSITIVE_KEYS = {
+    "api-key",
+    "api_key",
+    "authorization",
     "cookie",
     "cookies",
-    "sid",
-    "vst",
-    "monitor",
-    "token",
     "encoding_aes_key",
     "encodingaeskey",
+    "headers",
     "kitsecret",
+    "monitor",
+    "password",
+    "secret",
+    "sid",
+    "token",
+    "vst",
 }
 
 

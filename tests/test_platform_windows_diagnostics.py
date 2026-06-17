@@ -79,3 +79,45 @@ class WindowsDiagnosticsTest(unittest.TestCase):
         rendered = str(summary)
         self.assertNotIn("secret-value", rendered)
         self.assertNotIn("Bearer secret-value", rendered)
+
+    def test_redacts_common_secret_message_formats(self):
+        secret_messages = [
+            "token: secret-value",
+            "password=secret-value",
+            "api_key: secret-value",
+            "api-key: secret-value",
+            '{"token":"secret-value"}',
+        ]
+
+        for message in secret_messages:
+            with self.subTest(message=message):
+                summary = build_diagnostic_summary(
+                    machine_id="mch-001",
+                    robot_id="windows-rpa-01",
+                    task_id="task-001",
+                    mode="manual_debug",
+                    hostname="WIN-RPA-01",
+                    session_name="console",
+                    interactive_desktop=True,
+                    screen_resolution="1920x1080",
+                    display_scaling="100%",
+                    pid=1234,
+                    service_version="0.1.0",
+                    started_at="2026-06-17T09:55:00+08:00",
+                    current_task_id="task-001",
+                    wss_connected=True,
+                    last_heartbeat_at="2026-06-17T10:03:45+08:00",
+                    log_path="C:/rpa_group/logs/worker.log",
+                    artifact_dir="C:/rpa_group/artifacts/task-001",
+                    sqlite_path="C:/rpa_group/data/platform-worker.db",
+                    recent_errors=[
+                        {
+                            "at": "2026-06-17T10:03:00+08:00",
+                            "error_type": "LOGIN_REQUIRED",
+                            "step_key": "wecom_submit_online",
+                            "message": message,
+                        }
+                    ],
+                )
+
+                self.assertNotIn("secret-value", str(summary))

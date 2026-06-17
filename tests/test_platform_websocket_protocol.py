@@ -76,3 +76,14 @@ class WebSocketProtocolTest(unittest.TestCase):
                     "payload": {},
                 }
             )
+
+    def test_build_envelope_rejects_sensitive_headers(self):
+        with self.assertRaises(ValueError):
+            build_envelope(
+                message_type="task.progress",
+                machine_id="mch-001",
+                robot_id="windows-rpa-01",
+                payload={"headers": {"Authorization": "Bearer secret-value"}},
+                message_id="msg-sensitive",
+                sent_at="2026-06-17T10:04:00+08:00",
+            )

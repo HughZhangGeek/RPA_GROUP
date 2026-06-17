@@ -171,6 +171,24 @@ class WorkerWebSocketClientTest(unittest.TestCase):
         self.assertNotIn("secret-value", rendered)
         self.assertNotIn("Bearer secret-value", rendered)
 
+    def test_rejects_sensitive_headers_for_task_outbound_messages(self):
+        for method_name in ("send_progress", "send_result", "send_error"):
+            with self.subTest(method_name=method_name):
+                transport = FakeTransport(incoming=[])
+                client = WorkerWebSocketClient(
+                    transport=transport,
+                    machine_id="mch-001",
+                    robot_id="windows-rpa-01",
+                    hostname="WIN-RPA-01",
+                    service_version="0.1.0",
+                    capabilities={"wecom_bind_service": True},
+                )
+
+                with self.assertRaises(ValueError):
+                    getattr(client, method_name)({"headers": {"Authorization": "Bearer secret-value"}})
+
+                self.assertEqual(transport.sent, [])
+
 
 class WorkerConfigTest(unittest.TestCase):
     def test_loads_worker_env_file(self):
