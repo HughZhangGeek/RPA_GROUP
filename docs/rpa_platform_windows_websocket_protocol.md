@@ -531,18 +531,19 @@ Windows UI Automation selector
 }
 ```
 
-建议第一版支持的动作：
+命令模型当前支持的动作：
 
 - `activate_app`：激活企业微信窗口。
 - `find_element`：按 UIA selector 查找元素。
 - `click_element`：点击 UIA 元素中心点或调用可用的 invoke pattern。
 - `set_text`：对输入框设置文本，必要时用剪贴板粘贴兜底。
+- `clipboard_paste`：从剪贴板粘贴文本。
 - `send_hotkey`：发送快捷键。
 - `wait_until`：等待元素、图片或窗口状态出现。
 - `assert_element`：断言目标元素存在。
 - `capture_artifact`：保存本地截图或诊断 artifact。
 - `fallback_image_click`：图像识别兜底。
-- `fallback_position_click`：坐标兜底，必须标记高风险。
+- `fallback_position_click`：坐标兜底，必须标记 `risk_level=high`。
 
 ### 9.3 配置页和元素拾取器
 
