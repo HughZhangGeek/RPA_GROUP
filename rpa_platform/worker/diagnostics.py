@@ -1,19 +1,74 @@
+import re
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
-SENSITIVE_KEYS = {
+SENSITIVE_FIELD_NAMES = {
+    "api_key",
+    "authorization",
     "cookie",
     "cookies",
-    "sid",
-    "vst",
-    "monitor",
-    "token",
     "encoding_aes_key",
     "encodingaeskey",
-    "kitsecret",
     "headers",
+    "kitsecret",
+    "monitor",
+    "password",
+    "secret",
+    "sid",
+    "token",
+    "vst",
 }
+
+REDACTION_PATTERNS = (
+    re.compile(r"Authorization:\s*Bearer\s+[^\s,;]+", re.IGNORECASE),
+    re.compile(r"\bBearer\s+[^\s,;]+", re.IGNORECASE),
+    re.compile(r"\b(token|secret|password|api_key)=([^\s&;,]+)", re.IGNORECASE),
+)
+
+MAX_ERROR_MESSAGE_LENGTH = 500
+
+
+def _iter_sensitive_keys(value: Any) -> Iterable[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).lower()
+            if normalized in SENSITIVE_FIELD_NAMES:
+                yield normalized
+            yield from _iter_sensitive_keys(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_sensitive_keys(item)
+
+
+def ensure_diagnostic_payload_safe(payload: Dict[str, Any]) -> None:
+    for key in _iter_sensitive_keys(payload):
+        raise ValueError("Diagnostic payload contains sensitive key: %s" % key)
+
+
+def sanitize_diagnostic_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    ensure_diagnostic_payload_safe(payload)
+    return _sanitize_value(payload)
+
+
+def _redact_string(value: str) -> str:
+    redacted = value
+    redacted = REDACTION_PATTERNS[0].sub("Authorization: Bearer [REDACTED]", redacted)
+    redacted = REDACTION_PATTERNS[1].sub("Bearer [REDACTED]", redacted)
+    redacted = REDACTION_PATTERNS[2].sub(lambda match: "%s=[REDACTED]" % match.group(1), redacted)
+    if len(redacted) > MAX_ERROR_MESSAGE_LENGTH:
+        return redacted[:MAX_ERROR_MESSAGE_LENGTH] + "...[truncated]"
+    return redacted
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _sanitize_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_string(value)
+    return value
 
 
 def _clean_error(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -21,7 +76,10 @@ def _clean_error(error: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("at", "error_type", "step_key", "message"):
         value = error.get(key)
         if value is not None:
-            cleaned[key] = str(value)
+            text = str(value)
+            if key == "message":
+                text = _redact_string(text)
+            cleaned[key] = text
     return cleaned
 
 
@@ -76,8 +134,4 @@ def build_diagnostic_summary(
         },
         "recent_errors": [_clean_error(error) for error in recent_errors],
     }
-    rendered = str(summary).lower()
-    for key in SENSITIVE_KEYS:
-        if key in rendered:
-            raise ValueError("Diagnostic summary contains sensitive key: %s" % key)
-    return summary
+    return sanitize_diagnostic_payload(summary)

@@ -133,6 +133,44 @@ class WorkerWebSocketClientTest(unittest.TestCase):
         self.assertEqual(transport.sent[0]["type"], "worker.diagnostics")
         self.assertEqual(transport.sent[0]["payload"]["diagnostic_id"], "diag-001")
 
+    def test_rejects_diagnostics_payload_with_sensitive_headers(self):
+        transport = FakeTransport(incoming=[])
+        client = WorkerWebSocketClient(
+            transport=transport,
+            machine_id="mch-001",
+            robot_id="windows-rpa-01",
+            hostname="WIN-RPA-01",
+            service_version="0.1.0",
+            capabilities={"wecom_bind_service": True},
+        )
+
+        with self.assertRaises(ValueError):
+            client.send_diagnostics({"headers": {"Authorization": "Bearer secret-value"}})
+
+        self.assertEqual(transport.sent, [])
+
+    def test_redacts_diagnostics_payload_secret_patterns_before_sending(self):
+        transport = FakeTransport(incoming=[])
+        client = WorkerWebSocketClient(
+            transport=transport,
+            machine_id="mch-001",
+            robot_id="windows-rpa-01",
+            hostname="WIN-RPA-01",
+            service_version="0.1.0",
+            capabilities={"wecom_bind_service": True},
+        )
+
+        client.send_diagnostics(
+            {
+                "diagnostic_id": "diag-001",
+                "recent_errors": [{"message": "Authorization: Bearer secret-value"}],
+            }
+        )
+
+        rendered = str(transport.sent[0])
+        self.assertNotIn("secret-value", rendered)
+        self.assertNotIn("Bearer secret-value", rendered)
+
 
 class WorkerConfigTest(unittest.TestCase):
     def test_loads_worker_env_file(self):

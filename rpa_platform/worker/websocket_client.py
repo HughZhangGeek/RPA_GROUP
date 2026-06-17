@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
+from rpa_platform.worker.diagnostics import sanitize_diagnostic_payload
 from rpa_platform.worker.websocket_protocol import (
     WorkerRegisterPayload,
     build_envelope,
@@ -99,7 +100,7 @@ class WorkerWebSocketClient:
         self.transport.send_json(self._envelope("task.error", payload))
 
     def send_diagnostics(self, payload: Dict[str, Any]) -> None:
-        self.transport.send_json(self._envelope("worker.diagnostics", payload))
+        self.transport.send_json(self._envelope("worker.diagnostics", sanitize_diagnostic_payload(payload)))
 
     def _envelope(self, message_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return build_envelope(
