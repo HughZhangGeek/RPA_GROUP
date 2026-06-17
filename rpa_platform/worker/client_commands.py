@@ -1,3 +1,4 @@
+import copy
 from typing import Any, Dict
 
 
@@ -17,7 +18,7 @@ SUPPORTED_ACTIONS = {
 
 
 def normalize_client_command(raw: Dict[str, Any]) -> Dict[str, Any]:
-    command = dict(raw)
+    command = copy.deepcopy(raw)
     action = command.get("action", "")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError("Unsupported client command action: %s" % action)
@@ -29,6 +30,6 @@ def normalize_client_command(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Client command step_name is required")
     if action in ("click_element", "find_element", "set_text", "assert_element"):
         target = command.get("target") or {}
-        if target.get("type") != "uia":
+        if not isinstance(target, dict) or target.get("type") != "uia":
             raise ValueError("%s requires a UIA target" % action)
     return command

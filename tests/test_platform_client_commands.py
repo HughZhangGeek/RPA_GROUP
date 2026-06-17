@@ -37,3 +37,32 @@ class ClientCommandTest(unittest.TestCase):
                     "target": {"type": "position", "x": 100, "y": 200},
                 }
             )
+
+    def test_rejects_uia_action_with_non_dict_target_as_value_error(self):
+        with self.assertRaises(ValueError):
+            normalize_client_command(
+                {
+                    "step_key": "invalid_target",
+                    "step_name": "非法 target",
+                    "action": "click_element",
+                    "target": "not-a-dict",
+                }
+            )
+
+    def test_returns_command_without_sharing_nested_target(self):
+        raw = {
+            "step_key": "open_create_group",
+            "step_name": "打开发起群聊入口",
+            "action": "click_element",
+            "target": {
+                "type": "uia",
+                "window_title": "企业微信",
+                "control_type": "Button",
+                "name": "发起群聊",
+            },
+        }
+
+        command = normalize_client_command(raw)
+        command["target"]["name"] = "被 runner 修改"
+
+        self.assertEqual(raw["target"]["name"], "发起群聊")
