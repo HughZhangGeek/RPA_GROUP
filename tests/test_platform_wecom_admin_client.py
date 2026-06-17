@@ -9,6 +9,7 @@ from rpa_platform.integrations.wecom_admin_client import (
     WecomAdminTransport,
     WecomCustomApp,
     WecomSaveAppRequest,
+    WecomSessionExpiredError,
 )
 
 
@@ -201,6 +202,16 @@ class WecomAdminClientTest(unittest.TestCase):
 
         with self.assertRaises(AmbiguousWecomAppError):
             WecomAdminClient(FakeTransport([duplicate])).resolve_unique_custom_app(
+                suiteid=1,
+                enterprise_name="上海测试客户",
+                suite_name="简道云",
+            )
+
+    def test_resolve_unique_custom_app_reports_expired_session(self):
+        response = {"result": {"errCode": -3, "message": "outsession"}}
+
+        with self.assertRaises(WecomSessionExpiredError):
+            WecomAdminClient(FakeTransport([response])).resolve_unique_custom_app(
                 suiteid=1,
                 enterprise_name="上海测试客户",
                 suite_name="简道云",

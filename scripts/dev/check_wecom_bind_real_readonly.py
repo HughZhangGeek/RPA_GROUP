@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from rpa_platform.domain.redaction import mask_identifier
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient, JdyAdminError, JdyCorpDeploy
-from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomAdminError
+from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomAdminError, WecomSessionExpiredError
 from rpa_platform.services.wecom_bind_service import JdyWecomBindInput
 
 
@@ -157,6 +157,14 @@ def run_readonly_preflight(
             suiteid=bind_input.wecom_suiteid,
             enterprise_name=wecom_authcorp_name,
             suite_name=bind_input.suite_name,
+        )
+    except WecomSessionExpiredError as exc:
+        return _failure_summary(
+            bind_input,
+            "wecom_session_expired",
+            exc,
+            corp=corp,
+            owner_state=owner_state,
         )
     except (WecomAdminError, JsonHttpError) as exc:
         return _failure_summary(

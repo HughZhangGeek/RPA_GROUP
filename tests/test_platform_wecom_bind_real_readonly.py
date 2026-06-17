@@ -241,6 +241,26 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["reason"], "jdy_corp_not_unique_or_missing")
         self.assertNotIn("ww-plain-secret", serialized)
 
+    def test_readonly_preflight_reports_wecom_session_expired(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        class ExpiredWecomTransport(RecordingWecomTransport):
+            def get_json(self, path, params, headers):
+                self.calls.append(
+                    {"method": "GET", "path": path, "params": dict(params), "headers": dict(headers)}
+                )
+                return {"result": {"errCode": -3, "message": "outsession"}}
+
+        result = run_readonly_preflight(
+            make_request(),
+            jdy_client=JdyAdminClient(RecordingJdyTransport()),
+            wecom_client=WecomAdminClient(ExpiredWecomTransport()),
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "wecom_session_expired")
+        self.assertEqual(result["detail"], "WeCom admin session expired: outsession")
+
     def test_main_prints_json_without_sensitive_values_with_injected_clients(self):
         from scripts.dev.check_wecom_bind_real_readonly import main
 

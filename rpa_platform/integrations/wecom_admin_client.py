@@ -25,6 +25,10 @@ class WecomAdminError(RuntimeError):
     """Base error for WeCom developer admin API failures."""
 
 
+class WecomSessionExpiredError(WecomAdminError):
+    """Raised when the WeCom developer admin session is expired."""
+
+
 class MissingWecomAppError(WecomAdminError):
     """Raised when no custom app matches the expected enterprise and suite."""
 
@@ -253,6 +257,7 @@ class WecomAdminClient:
 
     @staticmethod
     def _extract_corpapp_rows(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        WecomAdminClient._raise_api_error_if_present(data)
         nested = data.get("data")
         if isinstance(nested, dict):
             value = nested.get("corpapp")
@@ -267,6 +272,7 @@ class WecomAdminClient:
 
     @staticmethod
     def _extract_corpapp(data: Dict[str, Any]) -> Dict[str, Any]:
+        WecomAdminClient._raise_api_error_if_present(data)
         nested = data.get("data")
         if isinstance(nested, dict):
             value = nested.get("corpapp")
@@ -288,6 +294,7 @@ class WecomAdminClient:
 
     @staticmethod
     def _extract_required_privilege_list(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        WecomAdminClient._raise_api_error_if_present(data)
         value = WecomAdminClient._extract_privilege_list(data)
         if value:
             return value
@@ -295,6 +302,7 @@ class WecomAdminClient:
 
     @staticmethod
     def _extract_order(data: Dict[str, Any]) -> Dict[str, Any]:
+        WecomAdminClient._raise_api_error_if_present(data)
         nested = data.get("data")
         if isinstance(nested, dict):
             value = nested.get("auditorder")
@@ -304,6 +312,7 @@ class WecomAdminClient:
 
     @staticmethod
     def _validate_trial_rule_response(data: Dict[str, Any]) -> None:
+        WecomAdminClient._raise_api_error_if_present(data)
         nested = data.get("data")
         if not isinstance(nested, dict) or not nested.get("is_already_set_try_info"):
             raise WecomAdminError("WeCom trial rule response missing confirmation")
@@ -325,6 +334,19 @@ class WecomAdminClient:
             raise WecomAdminError("WeCom SSO response did not confirm aes_app_id")
         if sdk_auth.get("redirect_domain2") != redirect_domain:
             raise WecomAdminError("WeCom SSO response did not confirm redirect_domain2")
+
+    @staticmethod
+    def _raise_api_error_if_present(data: Dict[str, Any]) -> None:
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return
+        err_code = result.get("errCode")
+        message = str(result.get("message", ""))
+        if err_code in (None, 0, "0"):
+            return
+        if err_code == -3 or message == "outsession":
+            raise WecomSessionExpiredError("WeCom admin session expired: outsession")
+        raise WecomAdminError("WeCom admin API error: errCode=%s message=%s" % (err_code, message))
 
     @staticmethod
     def _parse_custom_app(row: Dict[str, Any]) -> WecomCustomApp:
