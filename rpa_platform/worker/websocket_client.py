@@ -98,6 +98,9 @@ class WorkerWebSocketClient:
     def send_error(self, payload: Dict[str, Any]) -> None:
         self.transport.send_json(self._envelope("task.error", payload))
 
+    def send_diagnostics(self, payload: Dict[str, Any]) -> None:
+        self.transport.send_json(self._envelope("worker.diagnostics", payload))
+
     def _envelope(self, message_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return build_envelope(
             message_type=message_type,

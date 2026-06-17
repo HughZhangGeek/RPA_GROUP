@@ -189,27 +189,42 @@ python scripts/dev/run_platform_worker_once.py
 
 ### 6.5 Windows 调试验证
 
-Task 4 当前只提供 worker 配置加载和启动入口。只读诊断模式属于后续能力，在实现前不要按本文档执行诊断命令。
+只读诊断模式不会连接 WebSocket、不会 claim 新任务、不会执行真实写入，只读取 `worker.env`、生成或复用本地 `machine.json`，并在标准输出打印脱敏 JSON。
 
-当前可验证项：
+可复制命令：
 
-1. 用命令行启动 worker。
-2. 确认命令能读取 `worker.env`。
-3. 确认输出包含本机 `robot_id` 和 WebSocket 地址。
-4. 确认输出不包含机器 token、Cookie、EncodingAESKey 或 kitsecret 明文。
-5. 如需排查登录态、桌面会话、截图能力或 artifact 索引，先通过本机日志和人工检查收集证据，等只读诊断能力实现后再补充自动化验证。
+```powershell
+cd C:\path\to\RPA_GROUP
+.\.venv\Scripts\Activate.ps1
+python -m rpa_platform.worker.websocket_worker --env C:\rpa_group\config\worker.env --diagnose
+```
+
+预期：
+
+1. 命令返回 JSON。
+2. JSON 包含 `diagnostic_id`、`machine_id`、`robot_id`、`windows`、`worker`、`network`、`local_refs`。
+3. `network.wss_connected=false`，因为本地诊断不建立 WebSocket。
+4. `local_refs` 只包含本地路径提示，不包含日志正文、截图原图或 SQLite 内容。
+5. 输出不包含机器 token、Cookie、EncodingAESKey、kitsecret、请求头或浏览器登录态明文。
 
 ## 7. Windows 调试手册
 
 ### 7.1 调试入口
 
-Task 4 当前可执行入口只有第 5 节的 worker 启动命令。只读诊断入口将在后续任务实现，届时再补充可复制命令。
+本地只读诊断入口：
+
+```powershell
+python -m rpa_platform.worker.websocket_worker --env C:\rpa_group\config\worker.env --diagnose
+```
+
+该命令只打印脱敏诊断摘要并退出。它不会启动长连接、不会派发任务、不会重放任务，也不会触发任何真实写入。
 
 当前排障优先检查：
 
 - `worker.env` 路径是否正确。
-- `RPA_WS_URL`、`RPA_ROBOT_ID`、`RPA_DB_PATH` 是否能被启动入口读取。
-- 命令输出是否只包含 `robot_id` 和 WebSocket 地址，不泄露机器 token。
+- `RPA_ROBOT_ID`、`RPA_DB_PATH`、`RPA_LOG_PATH`、`RPA_ARTIFACT_DIR` 是否能被诊断入口读取。
+- `machine.json` 是否能生成或复用稳定 `machine_id`。
+- 命令输出是否只包含脱敏摘要和本地路径提示，不泄露机器 token。
 
 ### 7.2 本地证据路径
 
@@ -253,7 +268,7 @@ Test-NetConnection jdycsm.example.com -Port 443
 1. 用运行 worker 的同一 Windows 用户打开固定浏览器 Profile。
 2. 访问简道云后台和企微开发者后台。
 3. 如需扫码，扫码后不要关闭 Profile 目录或切换用户。
-4. 等待 worker heartbeat 上报登录态恢复；后续只读诊断能力实现后，再用诊断摘要确认 `login_health` 从 `waiting_login` 或 `unknown` 变为 `ok`。
+4. 等待 worker heartbeat 上报登录态恢复；也可以运行 `--diagnose` 确认当前 Windows session、交互桌面状态和本地证据路径。
 5. 再从 jdycsm 恢复任务。
 
 ### 7.4.1 登录二维码和通知策略
@@ -301,7 +316,7 @@ Windows RPA 登录态失效
 
 ### 7.6 任务重放
 
-任务重放属于后续规划能力，Task 4 当前启动入口不支持本地重放参数。该能力实现前，不要把 worker CLI 当作任务重放工具使用。
+任务重放属于后续规划能力，当前 worker CLI 不支持本地重放参数。该能力实现前，不要把 worker CLI 当作任务重放工具使用。
 
 后续如实现真实写入重放，必须满足：
 
@@ -437,7 +452,7 @@ task.error status=waiting_login error_type=LOGIN_REQUIRED
 4. 管理员远程登录 Windows。
 5. 管理员打开固定浏览器 Profile。
 6. 管理员扫码登录简道云后台或企微开发者后台。
-7. 管理员等待 worker heartbeat 上报登录态恢复，或在后续只读诊断能力可用后运行诊断检查。
+7. 管理员等待 worker heartbeat 上报登录态恢复，或运行 `--diagnose` 查看当前 Windows session、交互桌面状态和本地证据路径。
 8. 在 jdycsm 点击恢复，或由控制面按 login health 自动恢复。
 9. jdycsm 重新派发可恢复任务。
 

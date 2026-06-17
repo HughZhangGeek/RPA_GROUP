@@ -1,10 +1,12 @@
-import os
+import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from rpa_platform.worker.websocket_client import WorkerWebSocketClient
-from rpa_platform.worker.websocket_worker import load_worker_config
+from rpa_platform.worker.websocket_worker import load_worker_config, main
 
 
 class FakeTransport:
@@ -115,6 +117,22 @@ class WorkerWebSocketClientTest(unittest.TestCase):
         self.assertIsNone(transport.sent[0]["payload"]["local_execution_id"])
         self.assertEqual(transport.sent[0]["payload"]["reject_reason"], "handler_result_missing")
 
+    def test_sends_diagnostics_envelope(self):
+        transport = FakeTransport(incoming=[])
+        client = WorkerWebSocketClient(
+            transport=transport,
+            machine_id="mch-001",
+            robot_id="windows-rpa-01",
+            hostname="WIN-RPA-01",
+            service_version="0.1.0",
+            capabilities={"wecom_bind_service": True},
+        )
+
+        client.send_diagnostics({"diagnostic_id": "diag-001", "mode": "manual_debug"})
+
+        self.assertEqual(transport.sent[0]["type"], "worker.diagnostics")
+        self.assertEqual(transport.sent[0]["payload"]["diagnostic_id"], "diag-001")
+
 
 class WorkerConfigTest(unittest.TestCase):
     def test_loads_worker_env_file(self):
@@ -138,3 +156,37 @@ class WorkerConfigTest(unittest.TestCase):
             self.assertEqual(config.ws_url, "wss://jdycsm.example.com/rpa/ws/worker")
             self.assertEqual(config.robot_id, "windows-rpa-01")
             self.assertEqual(config.db_path, "C:/rpa_group/data/platform-worker.db")
+            self.assertEqual(config.log_path, "C:/rpa_group/logs/worker.log")
+            self.assertEqual(config.artifact_dir, "C:/rpa_group/artifacts")
+
+    def test_diagnose_prints_redacted_local_summary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / "worker.env"
+            machine_config = Path(tmpdir) / "machine.json"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "RPA_WS_URL=wss://jdycsm.example.com/rpa/ws/worker",
+                        "RPA_MACHINE_TOKEN=secret-token",
+                        "RPA_ROBOT_ID=windows-rpa-01",
+                        "RPA_DB_PATH=C:/rpa_group/data/platform-worker.db",
+                        "RPA_MACHINE_CONFIG=%s" % machine_config,
+                        "RPA_LOG_PATH=C:/rpa_group/logs/worker.log",
+                        "RPA_ARTIFACT_DIR=C:/rpa_group/artifacts",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(["--env", str(env_path), "--diagnose"])
+
+            self.assertEqual(exit_code, 0)
+            summary = json.loads(output.getvalue())
+            self.assertEqual(summary["robot_id"], "windows-rpa-01")
+            self.assertEqual(summary["mode"], "manual_debug")
+            self.assertFalse(summary["network"]["wss_connected"])
+            self.assertEqual(summary["local_refs"]["log_path_hint"], "C:/rpa_group/logs/worker.log")
+            self.assertNotIn("secret-token", output.getvalue())
+            self.assertNotIn("cookie", output.getvalue().lower())
