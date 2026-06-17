@@ -202,13 +202,18 @@ def ensure_playwright_node_package(node_work_dir: Path) -> None:
             encoding="utf-8",
         )
     completed = subprocess.run(
-        ["npm", "install", "--no-audit", "--no-fund", "playwright@1.61.0"],
+        _npm_install_command(),
         cwd=str(node_work_dir),
         check=False,
         text=True,
     )
     if completed.returncode != 0:
         raise CookieCaptureError("npm install playwright failed with exit code %s" % completed.returncode)
+
+
+def _npm_install_command() -> List[str]:
+    executable = "npm.cmd" if os.name == "nt" else "npm"
+    return [executable, "install", "--no-audit", "--no-fund", "playwright@1.61.0"]
 
 
 def _preflight_args(args: argparse.Namespace, jdy_cookie_file: Path, wecom_cookie_file: Path) -> List[str]:

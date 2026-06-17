@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 
 class WecomBindCookieCaptureTest(unittest.TestCase):
@@ -115,6 +116,15 @@ class WecomBindCookieCaptureTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(data["status"], "cookies_saved")
+
+    def test_npm_install_command_uses_cmd_shim_on_windows(self):
+        from scripts.dev import capture_wecom_bind_cookies as script
+
+        with mock.patch.object(script.os, "name", "nt"):
+            self.assertEqual(script._npm_install_command()[0], "npm.cmd")
+
+        with mock.patch.object(script.os, "name", "posix"):
+            self.assertEqual(script._npm_install_command()[0], "npm")
 
 
 if __name__ == "__main__":
