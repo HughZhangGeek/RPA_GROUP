@@ -21,3 +21,18 @@ class ElementPickerTest(unittest.TestCase):
         self.assertEqual(selector["control_type"], "Button")
         self.assertEqual(selector["window_title"], "企业微信")
         self.assertNotIn("screenshot", selector)
+
+    def test_copies_bounding_rect_hint_from_element(self):
+        element = {
+            "name": "发起群聊",
+            "automation_id": "",
+            "class_name": "Button",
+            "control_type": "Button",
+            "window_title": "企业微信",
+            "bounding_rect": [1, 2, 3, 4],
+        }
+
+        selector = build_selector_from_element(element)
+        selector["bounding_rect_hint"][0] = 99
+
+        self.assertEqual(element["bounding_rect"][0], 1)
