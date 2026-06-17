@@ -189,32 +189,27 @@ python scripts/dev/run_platform_worker_once.py
 
 ### 6.5 Windows 调试验证
 
-1. 用命令行启动 worker，并打开一个只读诊断模式。
-2. 确认 jdycsm 收到 `worker.diagnostics`。
-3. 确认诊断摘要包含 hostname、session、分辨率、DPI、worker pid、日志路径、artifact 路径和最近错误摘要。
-4. 确认诊断摘要不包含 Cookie、Token、EncodingAESKey、kitsecret、完整请求头或截图原图。
-5. 在 Windows 本地打开 `C:/rpa_group/logs/worker.log`，按 `task_id` 能定位同一条任务。
-6. 在 Windows 本地打开 `C:/rpa_group/artifacts/<task_id>/`，能找到截图或 trace 索引对应的原始文件。
-7. 断开 RDP 后再触发一次只读诊断，确认 session、分辨率和截图能力是否变化。
+Task 4 当前只提供 worker 配置加载和启动入口。只读诊断模式属于后续能力，在实现前不要按本文档执行诊断命令。
+
+当前可验证项：
+
+1. 用命令行启动 worker。
+2. 确认命令能读取 `worker.env`。
+3. 确认输出包含本机 `robot_id` 和 WebSocket 地址。
+4. 确认输出不包含机器 token、Cookie、EncodingAESKey 或 kitsecret 明文。
+5. 如需排查登录态、桌面会话、截图能力或 artifact 索引，先通过本机日志和人工检查收集证据，等只读诊断能力实现后再补充自动化验证。
 
 ## 7. Windows 调试手册
 
 ### 7.1 调试入口
 
-调试优先使用只读模式：
+Task 4 当前可执行入口只有第 5 节的 worker 启动命令。只读诊断入口将在后续任务实现，届时再补充可复制命令。
 
-```powershell
-cd C:\path\to\RPA_GROUP
-.\.venv\Scripts\Activate.ps1
-python -m rpa_platform.worker.websocket_worker --env C:\rpa_group\config\worker.env --diagnose
-```
+当前排障优先检查：
 
-预期：
-
-- 不 claim 新任务。
-- 不执行真实写入。
-- 输出本地诊断摘要。
-- 若已连接 jdycsm，则发送 `worker.diagnostics`。
+- `worker.env` 路径是否正确。
+- `RPA_WS_URL`、`RPA_ROBOT_ID`、`RPA_DB_PATH` 是否能被启动入口读取。
+- 命令输出是否只包含 `robot_id` 和 WebSocket 地址，不泄露机器 token。
 
 ### 7.2 本地证据路径
 
@@ -258,7 +253,7 @@ Test-NetConnection jdycsm.example.com -Port 443
 1. 用运行 worker 的同一 Windows 用户打开固定浏览器 Profile。
 2. 访问简道云后台和企微开发者后台。
 3. 如需扫码，扫码后不要关闭 Profile 目录或切换用户。
-4. 运行 `--diagnose`，确认 `login_health` 从 `waiting_login` 或 `unknown` 变为 `ok`。
+4. 等待 worker heartbeat 上报登录态恢复；后续只读诊断能力实现后，再用诊断摘要确认 `login_health` 从 `waiting_login` 或 `unknown` 变为 `ok`。
 5. 再从 jdycsm 恢复任务。
 
 ### 7.4.1 登录二维码和通知策略
@@ -306,13 +301,9 @@ Windows RPA 登录态失效
 
 ### 7.6 任务重放
 
-任务重放只能用于复现和排障，默认 dry-run：
+任务重放属于后续规划能力，Task 4 当前启动入口不支持本地重放参数。该能力实现前，不要把 worker CLI 当作任务重放工具使用。
 
-```powershell
-python -m rpa_platform.worker.websocket_worker --env C:\rpa_group\config\worker.env --replay-task task_001 --dry-run
-```
-
-真实写入重放必须满足：
+后续如实现真实写入重放，必须满足：
 
 - jdycsm 任务状态允许重试。
 - Windows 本地没有同一 `idempotency_key` 的成功记录。
@@ -446,7 +437,7 @@ task.error status=waiting_login error_type=LOGIN_REQUIRED
 4. 管理员远程登录 Windows。
 5. 管理员打开固定浏览器 Profile。
 6. 管理员扫码登录简道云后台或企微开发者后台。
-7. 管理员运行 `--diagnose` 或等待 worker heartbeat 上报登录态恢复。
+7. 管理员等待 worker heartbeat 上报登录态恢复，或在后续只读诊断能力可用后运行诊断检查。
 8. 在 jdycsm 点击恢复，或由控制面按 login health 自动恢复。
 9. jdycsm 重新派发可恢复任务。
 
