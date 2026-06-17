@@ -531,7 +531,7 @@ Windows UI Automation selector
 }
 ```
 
-命令模型当前支持的动作：
+命令模型当前可描述/校验的动作集合：
 
 - `activate_app`：激活企业微信窗口。
 - `find_element`：按 UIA selector 查找元素。
@@ -593,7 +593,7 @@ jdycsm 配置页点击“开始拾取”
 
 ### 9.5 当前 Runner 骨架状态
 
-`WecomCreateGroupRunner` 当前只是模板执行骨架，用于打通企微客户端建群 runner 的代码入口和测试边界。它在 fake UIA driver 下支持 `click_element` 和 `set_text` 两类动作：`click_element` 将 UIA target 交给 driver 点击，`set_text` 从任务 payload 读取 `value_from` 指定字段后写入目标元素。
+`WecomCreateGroupRunner` 当前只是模板执行骨架，用于打通企微客户端建群 runner 的代码入口和测试边界。上面的命令模型清单表示模板可以描述和校验的动作集合；Task 9 的 runner skeleton 目前只在 fake UIA driver 下执行 `click_element` 和 `set_text` 两类动作：`click_element` 将 UIA target 交给 driver 点击，`set_text` 从任务 payload 读取 `value_from` 指定字段后写入目标元素。其他动作需要后续执行器逐步补齐。
 
 这个骨架尚未完成真实企业微信客户端自动建群，不包含窗口激活、成员搜索选择、创建确认、失败截图、artifact 索引、真实 UIA driver 适配和端到端副作用保护。
 
