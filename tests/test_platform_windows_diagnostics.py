@@ -87,6 +87,7 @@ class WindowsDiagnosticsTest(unittest.TestCase):
             "api_key: secret-value",
             "api-key: secret-value",
             '{"token":"secret-value"}',
+            "Authorization: Basic secret-value",
         ]
 
         for message in secret_messages:

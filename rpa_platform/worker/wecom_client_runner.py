@@ -11,6 +11,8 @@ class WecomCreateGroupRunner:
         payload: Dict[str, Any],
         commands: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        if payload.get("test_mode") is not True and payload.get("confirm_write") is not True:
+            raise ValueError("Create-group runner requires test_mode=true or confirm_write=true")
         for command in commands:
             action = command["action"]
             target = command.get("target", {})

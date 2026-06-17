@@ -20,11 +20,24 @@ SENSITIVE_KEYS = {
     "vst",
 }
 
+SAFE_KEY_EXCEPTIONS = {
+    "idempotency_key",
+    "step_key",
+    "task_id",
+}
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = str(key).lower()
+    if normalized in SAFE_KEY_EXCEPTIONS:
+        return False
+    return normalized in SENSITIVE_KEYS or "secret" in normalized or "token" in normalized
+
 
 def _contains_sensitive_key(value: Any) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
-            if str(key).lower() in SENSITIVE_KEYS:
+            if _is_sensitive_key(key):
                 return True
             if _contains_sensitive_key(child):
                 return True

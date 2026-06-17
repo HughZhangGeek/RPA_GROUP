@@ -23,7 +23,9 @@ SENSITIVE_FIELD_NAMES = {
 
 REDACTION_PATTERNS = (
     re.compile(r"Authorization:\s*Bearer\s+[^\s,;]+", re.IGNORECASE),
+    re.compile(r"Authorization:\s*Basic\s+[^\s,;]+", re.IGNORECASE),
     re.compile(r"\bBearer\s+[^\s,;]+", re.IGNORECASE),
+    re.compile(r"\bBasic\s+[^\s,;]+", re.IGNORECASE),
     re.compile(r"([\"']?\b(?:token|secret|password|api[_-]key)[\"']?\s*[:=]\s*[\"']?)([^\"'\s&;,}]+)([\"']?)", re.IGNORECASE),
 )
 
@@ -55,8 +57,10 @@ def sanitize_diagnostic_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _redact_string(value: str) -> str:
     redacted = value
     redacted = REDACTION_PATTERNS[0].sub("Authorization: Bearer [REDACTED]", redacted)
-    redacted = REDACTION_PATTERNS[1].sub("Bearer [REDACTED]", redacted)
-    redacted = REDACTION_PATTERNS[2].sub(lambda match: "%s[REDACTED]%s" % (match.group(1), match.group(3)), redacted)
+    redacted = REDACTION_PATTERNS[1].sub("Authorization: Basic [REDACTED]", redacted)
+    redacted = REDACTION_PATTERNS[2].sub("Bearer [REDACTED]", redacted)
+    redacted = REDACTION_PATTERNS[3].sub("Basic [REDACTED]", redacted)
+    redacted = REDACTION_PATTERNS[4].sub(lambda match: "%s[REDACTED]%s" % (match.group(1), match.group(3)), redacted)
     if len(redacted) > MAX_ERROR_MESSAGE_LENGTH:
         return redacted[:MAX_ERROR_MESSAGE_LENGTH] + "...[truncated]"
     return redacted

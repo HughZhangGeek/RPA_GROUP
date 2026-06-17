@@ -87,3 +87,16 @@ class WebSocketProtocolTest(unittest.TestCase):
                 message_id="msg-sensitive",
                 sent_at="2026-06-17T10:04:00+08:00",
             )
+
+    def test_build_envelope_rejects_sensitive_key_patterns(self):
+        for field_name in ("client_secret", "app_secret", "machine_token"):
+            with self.subTest(field_name=field_name):
+                with self.assertRaises(ValueError):
+                    build_envelope(
+                        message_type="task.progress",
+                        machine_id="mch-001",
+                        robot_id="windows-rpa-01",
+                        payload={field_name: "secret-value"},
+                        message_id="msg-sensitive-pattern",
+                        sent_at="2026-06-17T10:05:00+08:00",
+                    )
