@@ -120,15 +120,7 @@ def run_readonly_preflight(
         if corp is None:
             return _failure_summary(bind_input, "jdy_corp_not_unique_or_missing", exc)
 
-    if corp.name not in acceptable_names:
-        return _summary(
-            bind_input=bind_input,
-            corp=corp,
-            app=None,
-            status="blocked",
-            reason="jdy_corp_name_mismatch",
-            owner_state="not_checked",
-        )
+    corp_name_mismatch = corp.name not in acceptable_names
 
     if owner is None:
         try:
@@ -152,7 +144,9 @@ def run_readonly_preflight(
         )
 
     try:
-        wecom_authcorp_name = bind_input.enterprise_short_name or corp.name or bind_input.enterprise_name
+        wecom_authcorp_name = corp.name if corp_name_mismatch else (
+            bind_input.enterprise_short_name or corp.name or bind_input.enterprise_name
+        )
         app = wecom_client.resolve_unique_custom_app(
             suiteid=bind_input.wecom_suiteid,
             enterprise_name=wecom_authcorp_name,
@@ -183,6 +177,9 @@ def run_readonly_preflight(
         status = "blocked"
     elif owner_state == "can_update_corp_secret":
         reason = "owner_already_bound_can_update_corp_secret"
+        status = "review"
+    elif corp_name_mismatch:
+        reason = "jdy_corp_name_mismatch"
         status = "review"
     else:
         reason = "ready_for_confirm_write"

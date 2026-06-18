@@ -164,6 +164,44 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["wecom"]["authcorp_name"], "南京示例集团")
         self.assertEqual(wecom_transport.calls[0]["params"]["corp_name_keyword"], "南京示例集团")
 
+    def test_readonly_preflight_allows_unique_corp_id_name_mismatch_as_review(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        class MismatchedNameJdyTransport(RecordingJdyTransport):
+            def post_json(self, path, payload):
+                response = super().post_json(path, payload)
+                if path == "/api/fx_sa/wxwork/get_corp_deploy_list":
+                    response["corp_deploy_list"][0]["name"] = "凯棠管理"
+                return response
+
+        class MismatchedNameWecomTransport(RecordingWecomTransport):
+            def get_json(self, path, params, headers):
+                response = super().get_json(path, params, headers)
+                if path == "/wwopen/developer/customApp/tpl/app/list":
+                    response["data"]["corpapp"][0]["authcorp_name"] = "凯棠管理"
+                return response
+
+        result = run_readonly_preflight(
+            JdyWecomBindInput(
+                enterprise_name="江苏凯棠工程项目管理有限公司",
+                enterprise_short_name="江苏凯棠工程项目管理有限公司",
+                plain_corp_id="ww4fc007a22672730b",
+                requested_user_id="69c888c9ff5bda0e12474dc7",
+                suite_id=1,
+                suite_scenario="main",
+                wecom_suiteid=1009479,
+                suite_name="简道云",
+            ),
+            jdy_client=JdyAdminClient(MismatchedNameJdyTransport()),
+            wecom_client=WecomAdminClient(MismatchedNameWecomTransport()),
+        )
+
+        self.assertEqual(result["status"], "review")
+        self.assertEqual(result["reason"], "jdy_corp_name_mismatch")
+        self.assertEqual(result["jdy"]["corp_name"], "凯棠管理")
+        self.assertEqual(result["jdy"]["owner_state"], "can_bind_corp_secret")
+        self.assertEqual(result["wecom"]["authcorp_name"], "凯棠管理")
+
     def test_readonly_preflight_reports_explainable_already_bound_owner_state(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
 
