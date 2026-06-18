@@ -1,6 +1,6 @@
 # RPA 平台 Windows WebSocket 执行协议草案
 
-状态：2026-06-17 草案
+状态：2026-06-18 草案
 适用范围：`rpa_platform/` 新平台化路径、jdycsm 控制面、Windows RPA 执行面
 非目标：不改旧 `RPA.py`，不让外部系统直连 Windows，不上传 Cookie 或业务密钥明文
 
@@ -73,6 +73,66 @@ X-RPA-Robot-ID: <robot_id>
 - `payload`：消息体，禁止放 Cookie、headers、Authorization、password、secret、client_secret、app_secret、machine_token、api_key、api-key 或密钥明文；字段名包含 `secret` 或 `token` 的值默认视为敏感字段，`task_id`、`step_key`、`idempotency_key` 除外。
 
 ## 5. 消息类型
+
+### 5.0 CSM_C360 已部署最小协议
+
+CSM_C360 当前已部署的公网 worker 入口为：
+
+```text
+wss://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/ws
+```
+
+本阶段 worker 侧实现优先兼容该最小协议，不要求使用下文旧草案的统一信封。连接鉴权通过 `RPA_WORKER_TOKEN`，token 只放在本地环境变量和连接 header 中，不进入消息体、日志、测试或文档。
+
+worker 首包：
+
+```json
+{
+  "type": "worker.hello",
+  "worker_id": "win-sim-001",
+  "capabilities": ["wecom_bind_service", "diagnostics", "runtime_health_check"],
+  "simulate": true,
+  "diagnostics": {
+    "machine_id": "win-sim-001",
+    "interactive_desktop": true,
+    "session_name": "console",
+    "resolution": "1920x1080",
+    "dpi_scale": "100%"
+  }
+}
+```
+
+控制面接受：
+
+```json
+{"type": "worker.accepted", "worker_id": "win-sim-001"}
+```
+
+任务派发：
+
+```json
+{
+  "type": "task.dispatch",
+  "task_id": "task_001",
+  "task_type": "wecom_bind_service",
+  "route_key": "wecom_bind_service",
+  "idempotency_key": "idem_001",
+  "simulate": true,
+  "payload": {
+    "task_type": "wecom_bind_service",
+    "enterprise_name": "zh_test_模拟客户",
+    "plain_corp_id": "ww_test"
+  }
+}
+```
+
+worker 回传：
+
+```json
+{"type": "task.accepted", "task_id": "task_001"}
+{"type": "task.progress", "task_id": "task_001", "status": "running", "message": "simulated handler started"}
+{"type": "task.completed", "task_id": "task_001", "status": "succeeded", "result": {"simulated": true, "handler": "wecom_bind_service"}}
+```
 
 ### 5.1 worker.register
 

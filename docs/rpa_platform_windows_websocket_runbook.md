@@ -1,6 +1,6 @@
 # RPA 平台 Windows WebSocket 部署 Runbook
 
-状态：2026-06-17 草案
+状态：2026-06-18 草案
 适用范围：Windows RPA 执行服务反连 jdycsm 控制面
 非目标：不部署旧 `RPA.py`，不开放 Windows 入站业务接口，不把 Cookie 或密钥明文上传到 jdycsm
 
@@ -83,6 +83,39 @@ RPA_CAPABILITIES=wecom_bind_service,browser_profile
 ```
 
 敏感配置不得提交到 Git。
+
+### 3.1 CSM_C360 控制面模拟 worker 配置
+
+当前 CSM_C360 公网控制面使用独立的最小 worker 协议，worker 侧优先使用环境变量启动，不需要修改旧 `RPA.py`：
+
+```powershell
+$env:C360_BASE_URL="https://jdycsm.sre.jdydevelop.com/csm-c360-api"
+$env:RPA_WORKER_TOKEN="<只在本机环境变量中配置>"
+$env:RPA_WORKER_ID="win-sim-001"
+$env:RPA_WORKER_SIMULATE="true"
+$env:RPA_WORKER_CAPABILITIES="wecom_bind_service,diagnostics,runtime_health_check"
+python -m rpa_platform.worker.c360_worker --once
+```
+
+worker 会从 `C360_BASE_URL` 推导 WebSocket 地址：
+
+```text
+wss://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/ws
+```
+
+本地控制面可使用：
+
+```powershell
+$env:C360_BASE_URL="http://127.0.0.1:3601"
+```
+
+推导结果为：
+
+```text
+ws://127.0.0.1:3601/v1/rpa/workers/ws
+```
+
+缺少 `RPA_WORKER_TOKEN` 时，入口会返回 blocked/error 并退出；输出不得包含 token、Cookie、headers、Authorization 或浏览器登录态。
 
 ## 4. 首次部署步骤
 
@@ -177,6 +210,45 @@ python scripts/dev/run_platform_worker_once.py
 4. Windows 回传 `task.progress`。
 5. 任务进入 `success` 或可解释的等待态。
 6. jdycsm 日志可按 `task_id` 串起完整链路。
+
+### 6.3.1 CSM_C360 公网 WSS 模拟端到端验证
+
+本阶段只验证模拟 handler，不执行真实企微绑定、不写简道云、不打开浏览器。验证步骤：
+
+1. 在 Windows 或本地 shell 中设置 `C360_BASE_URL`、`RPA_WORKER_TOKEN`、`RPA_WORKER_ID` 和 `RPA_WORKER_SIMULATE=true`。
+2. 启动：
+
+```powershell
+python -m rpa_platform.worker.c360_worker --once
+```
+
+3. 预期 worker 首包发送：
+
+```json
+{
+  "type": "worker.hello",
+  "worker_id": "win-sim-001",
+  "capabilities": ["wecom_bind_service", "diagnostics", "runtime_health_check"],
+  "simulate": true
+}
+```
+
+4. 控制面返回 `worker.accepted` 后，创建 `wecom_bind_service` 模拟任务。
+5. worker 收到 `task.dispatch` 后依次回传：
+
+```text
+task.accepted -> task.progress -> task.completed
+```
+
+6. `task.completed` 的模拟结果应包含：
+
+```json
+{"simulated": true, "handler": "wecom_bind_service"}
+```
+
+7. 通过控制面任务查询确认 `status=succeeded`、`result_json.simulated=true`、`worker_id` 等于当前 worker。
+
+如果没有可用 token 或公网 WSS 不通，不要把 token 粘贴到聊天、文档、日志或 PR；保留本地 fake transport 测试结果和阻塞原因即可。
 
 ### 6.4 断线恢复验证
 
