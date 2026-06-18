@@ -84,7 +84,7 @@ def build_default_diagnostics(
 
 
 def authorization_headers(config: C360WorkerConfig) -> Dict[str, str]:
-    return {"Authorization": "Bearer %s" % config.worker_token}
+    return {"X-RPA-Worker-Token": config.worker_token}
 
 
 def _required(values: Mapping[str, str], key: str) -> str:

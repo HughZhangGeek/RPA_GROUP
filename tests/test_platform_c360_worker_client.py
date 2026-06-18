@@ -2,6 +2,7 @@ import unittest
 
 from rpa_platform.worker.c360_worker_client import (
     C360WorkerConfigError,
+    authorization_headers,
     build_c360_worker_ws_url,
     build_default_diagnostics,
     build_worker_hello,
@@ -90,6 +91,19 @@ class C360WorkerClientConfigTest(unittest.TestCase):
         exit_code = main([], env={"C360_BASE_URL": "http://127.0.0.1:3601"})
 
         self.assertEqual(exit_code, 2)
+
+    def test_authorization_headers_use_csm_c360_worker_token_header(self):
+        config = load_c360_worker_config_from_env(
+            {
+                "C360_BASE_URL": "http://127.0.0.1:3601",
+                "RPA_WORKER_TOKEN": "secret-token",
+                "RPA_WORKER_ID": "win-sim-001",
+            }
+        )
+
+        headers = authorization_headers(config)
+
+        self.assertEqual(headers, {"X-RPA-Worker-Token": "secret-token"})
 
 
 if __name__ == "__main__":
