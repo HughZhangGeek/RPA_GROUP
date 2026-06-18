@@ -1,7 +1,7 @@
 import unittest
 
 from rpa_platform.worker.c360_worker_client import load_c360_worker_config_from_env
-from rpa_platform.worker.c360_worker_runtime import AioHttpJsonTransport, C360WorkerRuntime
+from rpa_platform.worker.c360_worker_runtime import AioHttpJsonTransport, C360WorkerRuntime, WorkerTaskResult
 from rpa_platform.worker.simulated_handlers import SimulatedTaskHandlers
 
 
@@ -120,6 +120,46 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.sent[-1]["status"], "failed")
         self.assertIn("Bearer [REDACTED]", transport.sent[-1]["error_message"])
         self.assertNotIn("secret-value", str(transport.sent))
+
+    async def test_handler_can_report_waiting_login_without_marking_task_succeeded(self):
+        class WaitingLoginHandlers(SimulatedTaskHandlers):
+            async def handle(self, dispatch):
+                return WorkerTaskResult(
+                    status="manual_action_required",
+                    result={
+                        "reason": "wecom_session_expired",
+                        "manual_action": "scan_wecom_admin_qr",
+                    },
+                    progress=[
+                        {
+                            "status": "waiting_login",
+                            "message": "wecom admin QR notification sent",
+                        }
+                    ],
+                )
+
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-sim-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-login",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": False,
+                    "payload": {"task_type": "wecom_bind_service"},
+                },
+            ]
+        )
+        runtime = C360WorkerRuntime(config=self._config(), transport=transport, handlers=WaitingLoginHandlers({}))
+
+        await runtime.run_until_idle()
+
+        self.assertEqual(transport.sent[-2]["type"], "task.progress")
+        self.assertEqual(transport.sent[-2]["status"], "waiting_login")
+        self.assertEqual(transport.sent[-1]["type"], "task.completed")
+        self.assertEqual(transport.sent[-1]["status"], "manual_action_required")
+        self.assertEqual(transport.sent[-1]["result"]["manual_action"], "scan_wecom_admin_qr")
 
 
 class SimulatedTaskHandlersTest(unittest.IsolatedAsyncioTestCase):

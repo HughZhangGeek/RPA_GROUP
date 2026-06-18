@@ -134,6 +134,22 @@ worker 回传：
 {"type": "task.completed", "task_id": "task_001", "status": "succeeded", "result": {"simulated": true, "handler": "wecom_bind_service"}}
 ```
 
+企微后台登录态失效时，worker 不应把任务伪装成成功。第一版恢复骨架使用只读预检结果驱动状态：
+
+```json
+{"type": "task.progress", "task_id": "task_001", "status": "waiting_login", "message": "wecom admin QR notification sent"}
+{"type": "task.completed", "task_id": "task_001", "status": "manual_action_required", "result": {"reason": "wecom_login_not_restored", "manual_action": "scan_wecom_admin_qr"}}
+```
+
+管理员扫码并由企微后台只读接口确认登录态恢复后，worker 重新执行只读预检。预检通过但尚未真实写入时，结果应停在待继续/待人工确认状态：
+
+```json
+{"type": "task.completed", "task_id": "task_001", "status": "ready_for_real_bind", "result": {"reason": "ready_for_confirm_write"}}
+{"type": "task.completed", "task_id": "task_002", "status": "manual_confirm_required", "result": {"reason": "jdy_corp_name_mismatch"}}
+```
+
+上述结果不得包含 Cookie、Token、Webhook、二维码原始内容或完整 CorpID。
+
 ### 5.1 worker.register
 
 Windows 连接成功后立即发送。

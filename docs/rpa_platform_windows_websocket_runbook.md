@@ -117,6 +117,54 @@ ws://127.0.0.1:3601/v1/rpa/workers/ws
 
 缺少 `RPA_WORKER_TOKEN` 时，入口会返回 blocked/error 并退出；输出不得包含 token、Cookie、headers、Authorization 或浏览器登录态。
 
+### 3.2 企微后台登录态恢复配置
+
+第一版登录态恢复只做只读预检、二维码通知和状态推进，不默认执行真实写入绑定。真实 webhook、Cookie、二维码图片都只保存在 Windows 本机，不提交到 Git，也不写入文档或日志。
+
+建议在 Windows 本机环境变量或 `worker.env` 中配置：
+
+```ini
+WECOM_LOGIN_RECOVERY_ENABLED=true
+WECOM_QR_NOTIFY_ENABLED=true
+WECOM_QR_NOTIFY_WEBHOOK_URL=<只在 Windows 本机安全配置中填写>
+WECOM_QR_NOTIFY_MODE=image
+WECOM_QR_NOTIFY_MENTION_MOBILES=<管理员手机号，多个用英文逗号分隔，可为空>
+WECOM_QR_TTL_SECONDS=120
+WECOM_QR_MAX_NOTIFY_TIMES=3
+WECOM_QR_ARTIFACT_DIR=C:/rpa_work/RPA_GROUP/.local/wecom-login-qr
+WECOM_ADMIN_COOKIE_FILE=C:/rpa_work/RPA_GROUP/.local/wecom-admin.cookie
+WECOM_BROWSER_PROFILE_DIR=C:/rpa_work/RPA_GROUP/.local/wecom-bind-browser-profile
+WECOM_LOGIN_RECOVERY_NODE_WORK_DIR=C:/rpa_work/RPA_GROUP/.local/playwright-wecom-login-recovery
+WECOM_LOGIN_URL=https://open.work.weixin.qq.com/wwopen/developers/tools
+WECOM_QR_SELECTOR=img[src*='qrcode'], canvas, .login_qrcode img, .qrcode img
+WECOM_BROWSER_CHANNEL=chrome
+```
+
+运行边界：
+
+- `WECOM_QR_ARTIFACT_DIR` 只存短期二维码 artifact，过期后应由本机清理任务删除。
+- `WECOM_ADMIN_COOKIE_FILE` 只保存企微后台 Cookie，不进入任务结果、日志或 PR。
+- `WECOM_BROWSER_PROFILE_DIR` 必须由运行 worker 的同一 Windows 用户创建和使用，不能混用 RDP 管理员和服务用户。
+- `WECOM_LOGIN_RECOVERY_NODE_WORK_DIR` 用于安装/缓存 Playwright Node 包和临时脚本，必须放在 `.local` 或 Windows 本机运行目录下。
+- 二维码通过配置好的企微运维群机器人发送，不发给业务提交人。
+- 管理员扫码后，worker 以企微后台只读接口返回有效 JSON 作为登录态恢复依据；二维码消失或页面跳转只作为辅助信号。
+- 登录恢复后重新执行只读预检；结果最多进入 `ready_for_real_bind` 或 `manual_confirm_required`，后续真实写入仍需独立确认开关。
+
+第一版实现链路：
+
+```text
+readonly preflight 返回 wecom_session_expired
+-> Playwright 使用 WECOM_BROWSER_PROFILE_DIR 打开 WECOM_LOGIN_URL
+-> 截取 WECOM_QR_SELECTOR 命中的二维码到 WECOM_QR_ARTIFACT_DIR
+-> 发送企微机器人 markdown/text/image 通知
+-> Node/Playwright 后台进程保持登录页存活到 TTL
+-> 每轮轮询从同一 browser profile 导出最新企微 Cookie 到 WECOM_ADMIN_COOKIE_FILE
+-> 企微只读接口 GET /wwopen/developer/customApp/tpl/app/list 验证登录态恢复
+-> 恢复后重跑 readonly preflight
+```
+
+如果 Playwright 无法识别二维码元素，应先在 Windows 本机打开企微登录页确认 DOM，再通过 `WECOM_QR_SELECTOR` 调整选择器。不要把页面 HTML、截图原图、Cookie 或 webhook 贴到聊天、PR 或文档。
+
 ## 4. 首次部署步骤
 
 ### 4.1 jdycsm 侧准备
@@ -249,6 +297,31 @@ task.accepted -> task.progress -> task.completed
 7. 通过控制面任务查询确认 `status=succeeded`、`result_json.simulated=true`、`worker_id` 等于当前 worker。
 
 如果没有可用 token 或公网 WSS 不通，不要把 token 粘贴到聊天、文档、日志或 PR；保留本地 fake transport 测试结果和阻塞原因即可。
+
+### 6.3.2 企微登录态恢复骨架验证
+
+本阶段只验证登录态恢复骨架，不真实写简道云、不执行企微绑定写入。
+
+本地测试命令：
+
+```bash
+python -m pytest \
+  tests/test_platform_wecom_bot.py \
+  tests/test_platform_wecom_login_recovery.py \
+  tests/test_platform_wecom_bind_recovery_handler.py \
+  tests/test_platform_c360_worker_runtime.py
+```
+
+预期：
+
+- 企微机器人 markdown、text、image payload 构造成功，payload 和返回值不包含 webhook key。
+- `outsession`、登录页、401/403 被识别为登录态失效。
+- 有效企微只读 JSON 被识别为登录态已恢复。
+- 遇到 `wecom_session_expired` 时，worker 使用固定 browser profile 截取二维码、发送二维码通知，并进入 `waiting_login`/`manual_action_required`。
+- 轮询期间后台 Playwright 进程保持登录页存活；编排结束后关闭该进程。
+- 每轮轮询先刷新 `WECOM_ADMIN_COOKIE_FILE`，再使用企微只读接口验证服务端登录态。
+- 登录恢复后自动重跑只读预检；`ok` 映射为 `ready_for_real_bind`，`review` 映射为 `manual_confirm_required`。
+- 输出不包含真实 CorpID、Cookie、Token、Webhook 或二维码原始内容。
 
 ### 6.4 断线恢复验证
 

@@ -1,6 +1,7 @@
 import asyncio
 import inspect
-from typing import Any, Dict, Optional, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Protocol
 
 from rpa_platform.worker.c360_worker_client import (
     C360WorkerConfig,
@@ -16,6 +17,13 @@ class AsyncJsonTransport(Protocol):
 
     async def receive_json(self) -> Optional[Dict[str, Any]]:
         raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class WorkerTaskResult:
+    status: str
+    result: Dict[str, Any] = field(default_factory=dict)
+    progress: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class C360WorkerRuntime:
@@ -63,6 +71,20 @@ class C360WorkerRuntime:
                     "task_id": task_id,
                     "status": "failed",
                     "error_message": _redact_string(str(exc)),
+                }
+            )
+            return
+        if isinstance(result, WorkerTaskResult):
+            for progress in result.progress:
+                payload = {"type": "task.progress", "task_id": task_id}
+                payload.update(progress)
+                await self.transport.send_json(payload)
+            await self.transport.send_json(
+                {
+                    "type": "task.completed",
+                    "task_id": task_id,
+                    "status": result.status,
+                    "result": result.result,
                 }
             )
             return
