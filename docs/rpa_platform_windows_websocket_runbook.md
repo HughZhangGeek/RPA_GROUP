@@ -164,7 +164,7 @@ readonly preflight 返回 wecom_session_expired
 -> 恢复后重跑 readonly preflight
 ```
 
-企微登录页当前会把真实二维码放在 `.wwLogin_qrcode_iframe` iframe 内；provider 会先查主页面，再扫描子 frame。如果 Playwright 仍无法识别二维码元素，应先在 Windows 本机打开企微登录页确认 DOM，再通过 `WECOM_QR_SELECTOR` 调整选择器。不要把页面 HTML、截图原图、Cookie 或 webhook 贴到聊天、PR 或文档。
+企微登录页当前会把真实二维码放在 `.wwLogin_qrcode_iframe` iframe 内；provider 会先查主页面，再扫描子 frame，并跳过尺寸过小的 loading/占位图片。如果 Playwright 仍无法识别二维码元素，应先在 Windows 本机打开企微登录页确认 DOM，再通过 `WECOM_QR_SELECTOR` 调整选择器。不要把页面 HTML、截图原图、Cookie 或 webhook 贴到聊天、PR 或文档。
 
 ## 4. 首次部署步骤
 

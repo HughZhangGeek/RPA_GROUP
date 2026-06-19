@@ -405,7 +405,16 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
 
         self.assertIn("findQrLocator", script)
         self.assertIn("page.frames()", script)
-        self.assertIn("frame.locator", script)
+        self.assertIn("findInScope(frame", script)
+
+    def test_qr_capture_script_rejects_tiny_loading_images(self):
+        from rpa_platform.worker.wecom_login_recovery import _node_qr_capture_script
+
+        script = _node_qr_capture_script()
+
+        self.assertIn("minQrEdge", script)
+        self.assertIn("boundingBox", script)
+        self.assertIn("box.width >= minQrEdge", script)
 
 
 class WecomCookieSessionTest(unittest.TestCase):

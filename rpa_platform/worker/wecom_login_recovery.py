@@ -637,12 +637,43 @@ if (browserChannel && browserChannel !== 'bundled') {
 }
 
 async function findQrLocator(page, selector) {
-  const pageLocator = page.locator(selector).first();
-  try {
-    await pageLocator.waitFor({ state: 'visible', timeout: 5000 });
+  const minQrEdge = 120;
+
+  async function findInScope(scope, timeout) {
+    try {
+      await scope.locator(selector).first().waitFor({ state: 'visible', timeout });
+    } catch (_error) {
+      return null;
+    }
+
+    const locator = scope.locator(selector);
+    const count = await locator.count();
+    let bestLocator = null;
+    let bestArea = 0;
+    for (let index = 0; index < count; index += 1) {
+      const candidate = locator.nth(index);
+      try {
+        await candidate.waitFor({ state: 'visible', timeout: 200 });
+        const box = await candidate.boundingBox();
+        const hasQrSize = box && box.width >= minQrEdge && box.height >= minQrEdge;
+        if (!hasQrSize) {
+          continue;
+        }
+        const area = box.width * box.height;
+        if (area > bestArea) {
+          bestArea = area;
+          bestLocator = candidate;
+        }
+      } catch (_error) {
+        // The page can refresh QR nodes while we inspect candidates.
+      }
+    }
+    return bestLocator;
+  }
+
+  const pageLocator = await findInScope(page, 5000);
+  if (pageLocator) {
     return pageLocator;
-  } catch (_error) {
-    // Continue into child frames. WeCom renders the login QR inside a visible iframe.
   }
 
   const deadline = Date.now() + 30000;
@@ -651,12 +682,9 @@ async function findQrLocator(page, selector) {
       if (frame === page.mainFrame()) {
         continue;
       }
-      const frameLocator = frame.locator(selector).first();
-      try {
-        await frameLocator.waitFor({ state: 'visible', timeout: 1000 });
+      const frameLocator = await findInScope(frame, 1000);
+      if (frameLocator) {
         return frameLocator;
-      } catch (_error) {
-        // Try the next frame until the global deadline expires.
       }
     }
     await page.waitForTimeout(500);
