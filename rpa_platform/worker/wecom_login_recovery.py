@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol
@@ -495,16 +496,15 @@ class WecomQrLoginNotifier:
         safe_context = _redact_notification_context(context)
         enterprise_name = str(safe_context.get("enterprise_name") or safe_context.get("企业客户名称") or "")
         lines = [
-            "任务：%s" % task_id,
-            "客户：%s" % enterprise_name,
-            "状态：企微后台登录态失效，等待管理员扫码恢复",
-            "过期时间戳：%s" % int(expires_at),
+            "当前绑定任务客户：%s" % enterprise_name,
+            "状态：企微服务商后台登录态失效，等待管理员扫码恢复",
+            "过期时间：%s" % _format_beijing_time(expires_at),
         ]
-        self.bot_client.send(build_markdown_payload("企微后台登录态恢复", lines))
+        self.bot_client.send(build_markdown_payload("企业微信服务商后台登录", lines))
         if self.mentioned_mobile_list:
             self.bot_client.send(
                 build_text_payload(
-                    "请扫码恢复企微开发者后台登录态，任务 %s。" % task_id,
+                    "请扫码恢复企业微信服务商后台登录态，任务 %s。" % task_id,
                     mentioned_mobile_list=self.mentioned_mobile_list,
                 )
             )
@@ -538,6 +538,11 @@ def _parse_int(raw: Optional[str], default: int) -> int:
         return int(str(raw).strip())
     except ValueError:
         return default
+
+
+def _format_beijing_time(timestamp: float) -> str:
+    beijing_tz = timezone(timedelta(hours=8))
+    return datetime.fromtimestamp(float(timestamp), tz=beijing_tz).strftime("%Y-%m-%d %H:%M:%S 北京时间")
 
 
 def _split_csv(raw: str) -> List[str]:

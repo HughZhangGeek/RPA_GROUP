@@ -285,8 +285,12 @@ class WecomQrLoginNotifierTest(unittest.TestCase):
             )
 
         self.assertEqual([payload["msgtype"] for payload in sent], ["markdown", "text", "image"])
-        self.assertIn("task-001", sent[0]["markdown"]["content"])
-        self.assertIn("上海测试客户", sent[0]["markdown"]["content"])
+        markdown_content = sent[0]["markdown"]["content"]
+        self.assertIn("**企业微信服务商后台登录**", markdown_content)
+        self.assertIn("当前绑定任务客户：上海测试客户", markdown_content)
+        self.assertIn("状态：企微服务商后台登录态失效，等待管理员扫码恢复", markdown_content)
+        self.assertIn("过期时间：1970-01-01 08:16:40 北京时间", markdown_content)
+        self.assertNotIn("过期时间戳", markdown_content)
         self.assertEqual(sent[1]["text"]["mentioned_mobile_list"], ["13800000000"])
         self.assertNotIn("corp-id-placeholder", str(sent))
 
