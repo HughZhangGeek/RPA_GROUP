@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from subprocess import CompletedProcess
@@ -440,7 +441,8 @@ class WecomCookieSessionTest(unittest.TestCase):
 
             self.assertTrue(result)
             self.assertEqual(cookie_file.read_text(encoding="utf-8"), "header-value-local")
-            self.assertEqual(cookie_file.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(cookie_file.stat().st_mode & 0o777, 0o600)
 
     def test_readonly_probe_reads_latest_cookie_file_for_each_call(self):
         calls = []
