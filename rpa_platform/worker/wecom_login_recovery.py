@@ -15,7 +15,10 @@ from rpa_platform.notifications.wecom_bot import build_image_payload, build_mark
 
 WECOM_BASE_URL = "https://open.work.weixin.qq.com"
 WECOM_LOGIN_URL = "https://open.work.weixin.qq.com/wwopen/developers/tools"
-DEFAULT_QR_SELECTOR = "img[src*='qrcode'], canvas, .login_qrcode img, .qrcode img"
+DEFAULT_QR_SELECTOR = (
+    "canvas, img[src*='qr'], img[src*='qrcode'], img[src*='login'], "
+    "[class*='qr'] canvas, [class*='qr'] img, [class*='qrcode'] img, [class*='login'] img"
+)
 
 
 class LoginSessionStatus(str, Enum):
@@ -633,12 +636,39 @@ if (browserChannel && browserChannel !== 'bundled') {
   launchOptions.channel = browserChannel;
 }
 
+async function findQrLocator(page, selector) {
+  const pageLocator = page.locator(selector).first();
+  try {
+    await pageLocator.waitFor({ state: 'visible', timeout: 5000 });
+    return pageLocator;
+  } catch (_error) {
+    // Continue into child frames. WeCom renders the login QR inside a visible iframe.
+  }
+
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) {
+        continue;
+      }
+      const frameLocator = frame.locator(selector).first();
+      try {
+        await frameLocator.waitFor({ state: 'visible', timeout: 1000 });
+        return frameLocator;
+      } catch (_error) {
+        // Try the next frame until the global deadline expires.
+      }
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`No visible WeCom login QR matched selector: ${selector}`);
+}
+
 const context = await chromium.launchPersistentContext(profileDir, launchOptions);
 try {
   const page = await context.newPage();
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  const locator = page.locator(qrSelector).first();
-  await locator.waitFor({ state: 'visible', timeout: 30000 });
+  const locator = await findQrLocator(page, qrSelector);
   await locator.screenshot({ path: outputPath });
   if (keepaliveSeconds > 0) {
     await new Promise((resolve) => setTimeout(resolve, keepaliveSeconds * 1000));

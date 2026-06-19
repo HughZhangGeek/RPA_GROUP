@@ -136,7 +136,7 @@ WECOM_ADMIN_COOKIE_FILE=C:/rpa_work/RPA_GROUP/.local/wecom-admin.cookie
 WECOM_BROWSER_PROFILE_DIR=C:/rpa_work/RPA_GROUP/.local/wecom-bind-browser-profile
 WECOM_LOGIN_RECOVERY_NODE_WORK_DIR=C:/rpa_work/RPA_GROUP/.local/playwright-wecom-login-recovery
 WECOM_LOGIN_URL=https://open.work.weixin.qq.com/wwopen/developers/tools
-WECOM_QR_SELECTOR=img[src*='qrcode'], canvas, .login_qrcode img, .qrcode img
+WECOM_QR_SELECTOR=canvas, img[src*='qr'], img[src*='qrcode'], img[src*='login'], [class*='qr'] canvas, [class*='qr'] img, [class*='qrcode'] img, [class*='login'] img
 WECOM_BROWSER_CHANNEL=chrome
 ```
 
@@ -155,7 +155,8 @@ WECOM_BROWSER_CHANNEL=chrome
 ```text
 readonly preflight 返回 wecom_session_expired
 -> Playwright 使用 WECOM_BROWSER_PROFILE_DIR 打开 WECOM_LOGIN_URL
--> 截取 WECOM_QR_SELECTOR 命中的二维码到 WECOM_QR_ARTIFACT_DIR
+-> 在主页面和可见 iframe 中查找 WECOM_QR_SELECTOR 命中的二维码
+-> 截取二维码到 WECOM_QR_ARTIFACT_DIR
 -> 发送企微机器人 markdown/text/image 通知
 -> Node/Playwright 后台进程保持登录页存活到 TTL
 -> 每轮轮询从同一 browser profile 导出最新企微 Cookie 到 WECOM_ADMIN_COOKIE_FILE
@@ -163,7 +164,7 @@ readonly preflight 返回 wecom_session_expired
 -> 恢复后重跑 readonly preflight
 ```
 
-如果 Playwright 无法识别二维码元素，应先在 Windows 本机打开企微登录页确认 DOM，再通过 `WECOM_QR_SELECTOR` 调整选择器。不要把页面 HTML、截图原图、Cookie 或 webhook 贴到聊天、PR 或文档。
+企微登录页当前会把真实二维码放在 `.wwLogin_qrcode_iframe` iframe 内；provider 会先查主页面，再扫描子 frame。如果 Playwright 仍无法识别二维码元素，应先在 Windows 本机打开企微登录页确认 DOM，再通过 `WECOM_QR_SELECTOR` 调整选择器。不要把页面 HTML、截图原图、Cookie 或 webhook 贴到聊天、PR 或文档。
 
 ## 4. 首次部署步骤
 

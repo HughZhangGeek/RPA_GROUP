@@ -398,6 +398,15 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
             self.assertTrue(fake_process.terminated)
             self.assertEqual(list((root / "node").glob("*.mjs")), [])
 
+    def test_qr_capture_script_falls_back_to_visible_iframes(self):
+        from rpa_platform.worker.wecom_login_recovery import _node_qr_capture_script
+
+        script = _node_qr_capture_script()
+
+        self.assertIn("findQrLocator", script)
+        self.assertIn("page.frames()", script)
+        self.assertIn("frame.locator", script)
+
 
 class WecomCookieSessionTest(unittest.TestCase):
     def test_playwright_cookie_exporter_reads_cookie_from_persistent_profile(self):
