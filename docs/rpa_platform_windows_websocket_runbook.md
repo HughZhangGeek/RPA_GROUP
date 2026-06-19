@@ -322,6 +322,9 @@ python -m pytest \
 - 轮询期间后台 Playwright 进程保持登录页存活；编排结束后关闭该进程。
 - 每轮轮询先刷新 `WECOM_ADMIN_COOKIE_FILE`，再使用企微只读接口验证服务端登录态。
 - 登录恢复后自动重跑只读预检；`ok` 映射为 `ready_for_real_bind`，`review` 映射为 `manual_confirm_required`。
+- 管理员未在 TTL 内扫码时返回 `waiting_login`、`wecom_login_not_restored`、`expires_at`、`notify_attempts`、`remaining_notify_attempts`、`next_action` 和 `retry_after`，控制面可按这些字段允许重新触发扫码。
+- 达到 `WECOM_QR_MAX_NOTIFY_TIMES` 后返回 `login_recovery_notify_exhausted`，不再生成或发送新的 QR，交给人工升级处理。
+- `waiting_login` 时 worker 结果和进度事件携带 `queue_control.action=pause`、`scope=wecom_bind_service`；登录恢复并重跑预检到 `ready_for_real_bind` / `manual_confirm_required` 时携带 `queue_control.action=resume`。
 - 输出不包含真实 CorpID、Cookie、Token、Webhook 或二维码原始内容。
 
 ### 6.3.3 企微服务商后台扫码恢复里程碑
@@ -346,14 +349,23 @@ REASON readonly_api_ok
 - `WECOM_ADMIN_COOKIE_FILE` 能更新，且只读接口 `/wwopen/developer/customApp/tpl/app/list` 返回有效 JSON。
 - 恢复登录态的权威判断为 `LOGIN_STATUS restored` 和 `REASON readonly_api_ok`，不是二维码是否消失。
 
-手动验证时，如果 PowerShell here-string 或管道导致通知中的中文客户名显示为 `????`，优先按编码问题处理；生产 WebSocket JSON 和 Python 文件应保持 UTF-8。后续如继续使用 PowerShell inline 脚本验证，建议使用 UTF-8 保存的 `.py` 文件或先显式设置控制台/进程编码。
+手动验证时，如果 PowerShell here-string 或管道导致通知中的中文客户名显示为 `????`，优先按编码问题处理；生产 WebSocket JSON 和 Python 文件应保持 UTF-8。推荐用本仓库 UTF-8 Python module 做本地 payload 预览，不走 PowerShell inline 管道：
+
+```powershell
+cd C:\rpa_work\RPA_GROUP
+.\.venv\Scripts\Activate.ps1
+$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+python -m rpa_platform.worker.wecom_login_notification_preview --task-id task-utf8 --enterprise-name "上海测试客户" --expires-at 1000
+```
+
+预期输出为 JSON，`markdown.content` 中包含 `上海测试客户`，且不出现 `????`。该命令只构造本地 payload，不发送 webhook、不读取 Cookie、不执行真实绑定写入。
 
 本里程碑仍不包含：
 
 - 企微真实绑定写入。
 - 简道云写入。
-- 管理员超时未扫码后的重新触发策略。
-- 未登录期间 worker 队列暂停和恢复策略。
+- CSM_C360 控制面真正落库并调度暂停/恢复同类任务。
+- 达到通知上限后的人工升级页面或运维工单流。
 
 这些项作为下一阶段优化单独开会话处理。
 
@@ -631,15 +643,16 @@ task.error status=waiting_login error_type=LOGIN_REQUIRED
 
 处理：
 
-1. Windows worker 上报 `task.error status=waiting_login`。
-2. jdycsm 创建人工处理单，状态进入 `waiting_login`。
-3. jdycsm 通过企微机器人通知 RPA 运维/机器人管理员，并附处理链接。
+1. Windows worker 上报 `task.progress status=waiting_login`，并在 result/progress 中携带 `queue_control.action=pause`、`scope=wecom_bind_service`。
+2. jdycsm 创建人工处理单，状态进入 `waiting_login`，并暂停同类 `wecom_bind_service` 任务；第一版不要求暂停诊断类任务或旧 `RPA.py` 队列。
+3. worker 通过配置的企微机器人发送 QR 通知给 RPA 运维/机器人管理员，通知次数由 `WECOM_QR_MAX_NOTIFY_TIMES` 控制。
 4. 管理员远程登录 Windows。
 5. 管理员打开固定浏览器 Profile。
 6. 管理员扫码登录简道云后台或企微开发者后台。
 7. 管理员等待 worker heartbeat 上报登录态恢复，或运行 `--diagnose` 查看当前 Windows session、交互桌面状态和本地证据路径。
-8. 在 jdycsm 点击恢复，或由控制面按 login health 自动恢复。
-9. jdycsm 重新派发可恢复任务。
+8. 若 TTL 到期仍未恢复，worker 返回 `waiting_login`、`reason=wecom_login_not_restored`、`expires_at`、`notify_attempts`、`remaining_notify_attempts`、`next_action` 和 `retry_after`；仍有剩余次数时，控制面可带回 `notify_attempts` 重新派发同任务以重新生成/发送 QR。
+9. 若达到上限，worker 返回 `login_recovery_notify_exhausted` 和 `manual_action=manual_escalation_required`，控制面保持同类队列暂停并转人工升级。
+10. 登录恢复后，worker 自动重跑只读预检；进入 `ready_for_real_bind` 或 `manual_confirm_required` 时上报 `queue_control.action=resume`，控制面再恢复同类任务调度。
 
 ### 9.2 worker 离线
 

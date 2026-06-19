@@ -21,6 +21,7 @@ class WecomBindRecoveryTaskHandler:
 
         if status == "waiting_login":
             safe_result["manual_action"] = "scan_wecom_admin_qr"
+            safe_result["queue_control"] = _pause_wecom_bind_queue_control()
             return WorkerTaskResult(
                 status="manual_action_required",
                 result=safe_result,
@@ -28,19 +29,43 @@ class WecomBindRecoveryTaskHandler:
                     {
                         "status": "waiting_login",
                         "message": "wecom admin QR notification sent",
+                        "queue_control": _pause_wecom_bind_queue_control(),
                     }
                 ],
             )
 
+        if status == "login_recovery_notify_exhausted":
+            safe_result["manual_action"] = "manual_escalation_required"
+            safe_result["queue_control"] = _pause_wecom_bind_queue_control()
+            return WorkerTaskResult(
+                status="manual_action_required",
+                result=safe_result,
+                progress=[
+                    {
+                        "status": "login_recovery_notify_exhausted",
+                        "message": "wecom admin QR notify attempts exhausted",
+                        "queue_control": _pause_wecom_bind_queue_control(),
+                    }
+                ],
+            )
+
+        if status in ("ready_for_real_bind", "manual_confirm_required"):
+            safe_result["queue_control"] = _resume_wecom_bind_queue_control()
+            progress_control = _resume_wecom_bind_queue_control()
+        else:
+            progress_control = None
+
+        progress = {
+            "status": status,
+            "message": "wecom bind readonly preflight completed",
+        }
+        if progress_control is not None:
+            progress["queue_control"] = progress_control
+
         return WorkerTaskResult(
             status=status,
             result=safe_result,
-            progress=[
-                {
-                    "status": status,
-                    "message": "wecom bind readonly preflight completed",
-                }
-            ],
+            progress=[progress],
         )
 
 
@@ -68,3 +93,19 @@ def _mask_key(value: Any, key_name: str) -> None:
     elif isinstance(value, list):
         for item in value:
             _mask_key(item, key_name)
+
+
+def _pause_wecom_bind_queue_control() -> Dict[str, str]:
+    return {
+        "action": "pause",
+        "scope": "wecom_bind_service",
+        "resume_when": "wecom_login_restored",
+    }
+
+
+def _resume_wecom_bind_queue_control() -> Dict[str, str]:
+    return {
+        "action": "resume",
+        "scope": "wecom_bind_service",
+        "resume_reason": "wecom_login_restored",
+    }

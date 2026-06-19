@@ -41,10 +41,46 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "manual_action_required")
         self.assertEqual(result.result["manual_action"], "scan_wecom_admin_qr")
         self.assertEqual(result.result["reason"], "wecom_login_not_restored")
+        self.assertEqual(
+            result.result["queue_control"],
+            {
+                "action": "pause",
+                "scope": "wecom_bind_service",
+                "resume_when": "wecom_login_restored",
+            },
+        )
         self.assertEqual(result.progress[0]["status"], "waiting_login")
+        self.assertEqual(result.progress[0]["queue_control"]["action"], "pause")
         self.assertEqual(recovery.calls[0]["task_id"], "task-001")
         self.assertEqual(recovery.calls[0]["context"]["enterprise_name"], "上海测试客户")
         self.assertNotIn("corp-id-placeholder", str(result))
+
+    async def test_notify_exhausted_result_requires_manual_escalation_and_keeps_queue_paused(self):
+        recovery = FakeRecovery(
+            {
+                "status": "login_recovery_notify_exhausted",
+                "reason": "wecom_login_not_restored",
+                "manual_action": "manual_escalation_required",
+                "notify_attempts": 3,
+                "remaining_notify_attempts": 0,
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-exhausted",
+                "task_type": "wecom_bind_service",
+                "payload": {"task_type": "wecom_bind_service", "enterprise_name": "上海测试客户"},
+            }
+        )
+
+        self.assertEqual(result.status, "manual_action_required")
+        self.assertEqual(result.result["status"], "login_recovery_notify_exhausted")
+        self.assertEqual(result.result["manual_action"], "manual_escalation_required")
+        self.assertEqual(result.result["queue_control"]["action"], "pause")
+        self.assertEqual(result.progress[0]["status"], "login_recovery_notify_exhausted")
+        self.assertEqual(result.progress[0]["queue_control"]["scope"], "wecom_bind_service")
 
     async def test_ready_for_real_bind_remains_pending_manual_confirmation(self):
         recovery = FakeRecovery(
@@ -66,7 +102,16 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "ready_for_real_bind")
         self.assertEqual(result.result["reason"], "ready_for_confirm_write")
+        self.assertEqual(
+            result.result["queue_control"],
+            {
+                "action": "resume",
+                "scope": "wecom_bind_service",
+                "resume_reason": "wecom_login_restored",
+            },
+        )
         self.assertEqual(result.progress[0]["status"], "ready_for_real_bind")
+        self.assertEqual(result.progress[0]["queue_control"]["action"], "resume")
         self.assertNotIn("corp-id-placeholder", str(result))
 
     async def test_unsupported_task_type_raises_value_error(self):

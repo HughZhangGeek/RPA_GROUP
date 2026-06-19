@@ -1,6 +1,9 @@
 import os
 import tempfile
 import unittest
+import json
+import subprocess
+import sys
 from subprocess import CompletedProcess
 from pathlib import Path
 
@@ -126,6 +129,108 @@ class WecomLoginRecoveryOrchestratorTest(unittest.TestCase):
         self.assertEqual(notifier.calls[0]["task_id"], "task-001")
         self.assertEqual(notifier.calls[0]["expires_at"], 1120.0)
         self.assertEqual(notifier.calls[0]["context"]["enterprise_name"], "上海测试客户")
+
+    def test_timeout_returns_waiting_login_with_retry_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            qr_path = Path(tmpdir) / "qr.png"
+            qr_path.write_bytes(b"qr")
+            notifier = FakeNotifier()
+            provider = FakeQrProvider(qr_path)
+            orchestrator = WecomLoginRecoveryOrchestrator(
+                config=LoginRecoveryConfig(
+                    enabled=True,
+                    qr_notify_enabled=True,
+                    ttl_seconds=10,
+                    poll_interval_seconds=5,
+                    max_notify_times=3,
+                ),
+                preflight=lambda: {"status": "blocked", "reason": "wecom_session_expired", "detail": "outsession"},
+                health_checker=LoginSessionHealthChecker(
+                    FakeReadonlyProbe(
+                        [
+                            {"result": {"errCode": -3, "message": "outsession"}},
+                            {"result": {"errCode": -3, "message": "outsession"}},
+                        ]
+                    )
+                ),
+                qr_provider=provider,
+                notifier=notifier,
+                sleep=lambda seconds: None,
+                now=lambda: 1000.0,
+            )
+
+            result = orchestrator.run(
+                task_id="task-timeout",
+                context={"enterprise_name": "上海测试客户", "notify_attempts": 1},
+            )
+
+        self.assertEqual(result["status"], "waiting_login")
+        self.assertEqual(result["reason"], "wecom_login_not_restored")
+        self.assertEqual(result["expires_at"], 1010.0)
+        self.assertEqual(result["notify_attempts"], 2)
+        self.assertEqual(result["remaining_notify_attempts"], 1)
+        self.assertEqual(result["next_action"], "retry_wecom_login_qr")
+        self.assertEqual(result["retry_after"], 1010.0)
+        self.assertEqual(len(notifier.calls), 1)
+        self.assertEqual(provider.calls, 1)
+
+    def test_allows_retrigger_until_notify_limit_then_requires_manual_escalation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            qr_path = Path(tmpdir) / "qr.png"
+            qr_path.write_bytes(b"qr")
+            notifier = FakeNotifier()
+            provider = FakeQrProvider(qr_path)
+            orchestrator = WecomLoginRecoveryOrchestrator(
+                config=LoginRecoveryConfig(
+                    enabled=True,
+                    qr_notify_enabled=True,
+                    ttl_seconds=5,
+                    poll_interval_seconds=5,
+                    max_notify_times=2,
+                ),
+                preflight=lambda: {"status": "blocked", "reason": "wecom_session_expired"},
+                health_checker=LoginSessionHealthChecker(
+                    FakeReadonlyProbe([{"result": {"errCode": -3, "message": "outsession"}}])
+                ),
+                qr_provider=provider,
+                notifier=notifier,
+                sleep=lambda seconds: None,
+                now=lambda: 2000.0,
+            )
+
+            retried = orchestrator.run(
+                task_id="task-retry",
+                context={"enterprise_name": "上海测试客户", "login_recovery": {"notify_attempts": 1}},
+            )
+
+        self.assertEqual(retried["status"], "waiting_login")
+        self.assertEqual(retried["notify_attempts"], 2)
+        self.assertEqual(retried["remaining_notify_attempts"], 0)
+        self.assertEqual(retried["next_action"], "manual_escalation_required")
+        self.assertEqual(len(notifier.calls), 1)
+        self.assertEqual(provider.calls, 1)
+
+        exhausted_provider = FakeQrProvider(qr_path)
+        exhausted_notifier = FakeNotifier()
+        exhausted = WecomLoginRecoveryOrchestrator(
+            config=LoginRecoveryConfig(enabled=True, qr_notify_enabled=True, max_notify_times=2),
+            preflight=lambda: {"status": "blocked", "reason": "wecom_session_expired"},
+            health_checker=LoginSessionHealthChecker(FakeReadonlyProbe([])),
+            qr_provider=exhausted_provider,
+            notifier=exhausted_notifier,
+            sleep=lambda seconds: None,
+            now=lambda: 3000.0,
+        ).run(
+            task_id="task-exhausted",
+            context={"enterprise_name": "上海测试客户", "notify_attempts": 2},
+        )
+
+        self.assertEqual(exhausted["status"], "login_recovery_notify_exhausted")
+        self.assertEqual(exhausted["manual_action"], "manual_escalation_required")
+        self.assertEqual(exhausted["notify_attempts"], 2)
+        self.assertEqual(exhausted["remaining_notify_attempts"], 0)
+        self.assertEqual(exhausted_provider.calls, 0)
+        self.assertEqual(exhausted_notifier.calls, [])
 
     def test_refreshes_cookie_session_before_each_login_health_poll(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,6 +398,35 @@ class WecomQrLoginNotifierTest(unittest.TestCase):
         self.assertNotIn("过期时间戳", markdown_content)
         self.assertEqual(sent[1]["text"]["mentioned_mobile_list"], ["13800000000"])
         self.assertNotIn("corp-id-placeholder", str(sent))
+
+
+class WecomLoginNotificationPreviewCliTest(unittest.TestCase):
+    def test_utf8_preview_preserves_chinese_customer_name(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "rpa_platform.worker.wecom_login_notification_preview",
+                "--task-id",
+                "task-utf8",
+                "--enterprise-name",
+                "上海测试客户",
+                "--expires-at",
+                "1000",
+            ],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        content = payload["markdown"]["content"]
+        self.assertIn("上海测试客户", content)
+        self.assertNotIn("????", completed.stdout)
 
 
 class LocalQrArtifactProviderTest(unittest.TestCase):

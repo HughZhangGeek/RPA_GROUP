@@ -437,9 +437,23 @@ class WecomLoginRecoveryOrchestrator:
         if not self.config.enabled:
             return first
 
+        notify_attempts_before = _notify_attempts_from_context(context)
+        max_notify_times = max(0, int(self.config.max_notify_times))
+        if self.config.qr_notify_enabled and max_notify_times > 0 and notify_attempts_before >= max_notify_times:
+            return {
+                "status": "login_recovery_notify_exhausted",
+                "reason": "wecom_login_not_restored",
+                "detail": "wecom login QR notify attempts exhausted",
+                "manual_action": "manual_escalation_required",
+                "notify_attempts": notify_attempts_before,
+                "remaining_notify_attempts": 0,
+                "next_action": "manual_escalation_required",
+            }
+
         qr_path = self.qr_provider.capture()
         try:
             expires_at = self.now() + self.config.ttl_seconds
+            notify_attempts = notify_attempts_before
             if self.config.qr_notify_enabled and self.config.max_notify_times > 0:
                 self.notifier.notify_qr(
                     task_id=task_id,
@@ -447,6 +461,7 @@ class WecomLoginRecoveryOrchestrator:
                     expires_at=expires_at,
                     context=dict(context),
                 )
+                notify_attempts += 1
 
             attempts = max(1, int(self.config.ttl_seconds / max(1, self.config.poll_interval_seconds)))
             last_check = LoginSessionCheckResult(LoginSessionStatus.EXPIRED, "not_checked")
@@ -474,6 +489,14 @@ class WecomLoginRecoveryOrchestrator:
                 "reason": "wecom_login_not_restored",
                 "detail": last_check.detail or last_check.reason,
                 "expires_at": expires_at,
+                "notify_attempts": notify_attempts,
+                "remaining_notify_attempts": max(0, max_notify_times - notify_attempts),
+                "next_action": _next_login_recovery_action(
+                    qr_notify_enabled=self.config.qr_notify_enabled,
+                    max_notify_times=max_notify_times,
+                    notify_attempts=notify_attempts,
+                ),
+                "retry_after": expires_at,
             }
         finally:
             close = getattr(self.qr_provider, "close", None)
@@ -493,14 +516,7 @@ class WecomQrLoginNotifier:
         self.notify_mode = notify_mode
 
     def notify_qr(self, *, task_id: str, qr_path: Path, expires_at: float, context: Dict[str, Any]) -> None:
-        safe_context = _redact_notification_context(context)
-        enterprise_name = str(safe_context.get("enterprise_name") or safe_context.get("企业客户名称") or "")
-        lines = [
-            "当前绑定任务客户：%s" % enterprise_name,
-            "状态：企微服务商后台登录态失效，等待管理员扫码恢复",
-            "过期时间：%s" % _format_beijing_time(expires_at),
-        ]
-        self.bot_client.send(build_markdown_payload("企业微信服务商后台登录", lines))
+        self.bot_client.send(build_wecom_qr_login_markdown_payload(expires_at=expires_at, context=context))
         if self.mentioned_mobile_list:
             self.bot_client.send(
                 build_text_payload(
@@ -510,6 +526,17 @@ class WecomQrLoginNotifier:
             )
         if self.notify_mode == "image":
             self.bot_client.send(build_image_payload(qr_path))
+
+
+def build_wecom_qr_login_markdown_payload(*, expires_at: float, context: Dict[str, Any]) -> Dict[str, Any]:
+    safe_context = _redact_notification_context(context)
+    enterprise_name = str(safe_context.get("enterprise_name") or safe_context.get("企业客户名称") or "")
+    lines = [
+        "当前绑定任务客户：%s" % enterprise_name,
+        "状态：企微服务商后台登录态失效，等待管理员扫码恢复",
+        "过期时间：%s" % _format_beijing_time(expires_at),
+    ]
+    return build_markdown_payload("企业微信服务商后台登录", lines)
 
 
 def _map_preflight_result(preflight: Dict[str, Any]) -> Dict[str, Any]:
@@ -547,6 +574,31 @@ def _format_beijing_time(timestamp: float) -> str:
 
 def _split_csv(raw: str) -> List[str]:
     return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def _notify_attempts_from_context(context: Dict[str, Any]) -> int:
+    candidates = [
+        context.get("notify_attempts"),
+        context.get("wecom_login_notify_attempts"),
+    ]
+    login_recovery = context.get("login_recovery")
+    if isinstance(login_recovery, dict):
+        candidates.append(login_recovery.get("notify_attempts"))
+    for candidate in candidates:
+        try:
+            if candidate is not None and str(candidate).strip() != "":
+                return max(0, int(str(candidate).strip()))
+        except ValueError:
+            continue
+    return 0
+
+
+def _next_login_recovery_action(*, qr_notify_enabled: bool, max_notify_times: int, notify_attempts: int) -> str:
+    if not qr_notify_enabled:
+        return "manual_scan_on_windows"
+    if max_notify_times > 0 and notify_attempts < max_notify_times:
+        return "retry_wecom_login_qr"
+    return "manual_escalation_required"
 
 
 def _redact_notification_context(context: Dict[str, Any]) -> Dict[str, Any]:

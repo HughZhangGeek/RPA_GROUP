@@ -228,27 +228,32 @@ WECOM_ADMIN_COOKIE_FILE=.local/wecom-admin.cookie
 
 ### Task 3：worker 真实预检 handler
 
-状态：第一版骨架已完成。
+状态：第一版 worker 侧状态已完成。
 
 - 遇到 `wecom_session_expired` 时可发送二维码通知并轮询登录态恢复。
 - 当前恢复后最多进入 `ready_for_real_bind` / `manual_confirm_required`，不默认真实写入。
-- 真实 worker 任务流和控制面队列策略仍建议下一阶段单独验证。
+- `waiting_login` 会映射为 `manual_action_required`，并带 `queue_control.action=pause`、`scope=wecom_bind_service`，表达只暂停企微绑定类任务。
+- `ready_for_real_bind` / `manual_confirm_required` 会带 `queue_control.action=resume`，表达登录已恢复、同类队列可恢复调度。
+- CSM_C360 控制面的落库、调度暂停和自动恢复仍需要跨仓实现，本仓只先定义 worker 可消费结果/事件。
 
 ### Task 4：恢复后自动重试预检
 
-状态：编排骨架已完成，生产队列策略待优化。
+状态：编排骨架和 QR 重触发状态已完成。
 
 - 扫码恢复后已支持重跑只读预检。
 - `ok` 映射为 `ready_for_real_bind`，`review` 映射为 `manual_confirm_required`。
-- 管理员超时未扫码后的重新触发二维码策略待下一阶段设计。
+- 管理员超时未扫码时返回 `waiting_login`、`reason=wecom_login_not_restored`、`expires_at`、`notify_attempts`、`remaining_notify_attempts`、`next_action` 和 `retry_after`。
+- 控制面重新派发时可把 `notify_attempts` 或 `login_recovery.notify_attempts` 带回 worker；未超过 `WECOM_QR_MAX_NOTIFY_TIMES` 时会重新生成/发送 QR 并继续只读验证。
+- 达到通知上限时返回 `login_recovery_notify_exhausted` 和 `manual_action=manual_escalation_required`，不会继续生成/发送 QR，避免无限刷屏。
 
 ### Task 5：控制面状态与可观测性
 
-状态：待下一阶段。
+状态：worker 事件契约已定义，控制面联动待下一阶段。
 
-- 需要明确未登录时 worker 队列是否暂停，以及恢复登录后如何继续处理积压任务。
-- 需要明确 `waiting_login`、二维码通知时间、过期时间、重试次数和最后错误在 CSM_C360 的记录方式。
-- 需要明确超时未扫码时如何重新触发扫码通知，避免无限刷屏。
+- 未登录期间第一版建议暂停同类 `wecom_bind_service` 队列，不暂停诊断类任务，也不触碰旧 `RPA.py` 队列。
+- `waiting_login`、二维码过期时间、通知次数、剩余次数和下一步动作已由 worker result/progress 提供给 CSM_C360 消费。
+- CSM_C360 如何把这些字段落入 `rpa_tasks` / 人工处理单、如何恢复积压任务，仍需在 CSM_C360 仓库单独实现。
+- 超时未扫码时队列保持暂停；仍有剩余通知次数则允许重新触发 QR，次数耗尽后进入人工升级。
 
 ## 不做的事
 
@@ -276,20 +281,28 @@ docs/superpowers/handoff/2026-06-16-rpa-platform-service-boundary-handoff.md
 docs/superpowers/handoff/2026-06-16-rpa-platform-wecom-bind-real-success-handoff.md
 ```
 
-建议新会话从“队列暂停/恢复策略”和“超时未扫码后的重新触发策略”开始，不先碰真实写入。
+建议新会话从 CSM_C360 控制面消费 `queue_control` 和 `notify_attempts` 开始，不先碰真实写入。
 
 已知待优化点：
 
-- 手动 PowerShell inline 脚本可能导致中文客户名显示为 `????`；生产路径应保证 WebSocket JSON、worker env 和 Python 源文件均为 UTF-8。
-- 管理员超过 `WECOM_QR_TTL_SECONDS` 未扫码时，需要定义重新通知入口、最大通知次数和任务状态。
-- 未登录期间，队列应暂停还是只暂停同类企微绑定任务，需要结合 CSM_C360 控制面状态机设计。
-- 登录恢复后如何自动唤醒队列并重试只读预检，需要下一阶段补端到端任务流验证。
+- 手动 PowerShell inline 脚本可能导致中文客户名显示为 `????`；当前已新增 UTF-8 本地预览入口：
+
+```powershell
+cd C:\rpa_work\RPA_GROUP
+.\.venv\Scripts\Activate.ps1
+$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+python -m rpa_platform.worker.wecom_login_notification_preview --task-id task-utf8 --enterprise-name "上海测试客户" --expires-at 1000
+```
+
+- CSM_C360 需要消费 `queue_control.action=pause/resume`、`scope=wecom_bind_service`、`notify_attempts`、`remaining_notify_attempts`、`next_action` 和 `retry_after`。
+- 登录恢复后如何自动唤醒控制面同类队列并重试只读预检，需要下一阶段补端到端任务流验证。
 
 ## 相关代码文件/模块
 
 - `rpa_platform/worker/c360_worker.py`
 - `rpa_platform/worker/c360_worker_runtime.py`
 - `rpa_platform/worker/wecom_login_recovery.py`
+- `rpa_platform/worker/wecom_login_notification_preview.py`
 - `rpa_platform/worker/wecom_bind_recovery_handler.py`
 - `rpa_platform/notifications/wecom_bot.py`
 - `rpa_platform/worker/simulated_handlers.py`
