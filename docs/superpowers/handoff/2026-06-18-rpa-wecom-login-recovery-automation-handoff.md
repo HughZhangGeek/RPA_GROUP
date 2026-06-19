@@ -2,9 +2,9 @@
 
 ## 生命周期
 
-- 状态：待实现
-- 当前阶段：登录态恢复自动化设计已确认，准备进入实现
-- 最近更新：2026-06-18
+- 状态：阶段性完成
+- 当前阶段：企微服务商后台登录态恢复只读闭环已实现并完成 Windows 验证
+- 最近更新：2026-06-19
 - 仓库：`/Users/hugh/jdycsm_project/RPA_GROUP`
 - Windows Server 路径：`C:\rpa_work\RPA_GROUP`
 - 分支：`feat/windows-websocket-worker`
@@ -73,20 +73,53 @@ status=review
 reason=jdy_corp_name_mismatch
 ```
 
-## 本阶段目标
+### 4. 企微服务商后台登录态恢复闭环已实现并验证
+
+本阶段新增并推送了企微服务商后台登录态恢复骨架：
+
+- `9719b73 docs: 补充企微登录态恢复自动化交接`
+- `ba9a64d feat: 实现企微登录态恢复骨架`
+- `e1ec60b test: 兼容 Windows 文件权限断言`
+- `ff2e126 fix: 支持企微登录二维码 iframe 捕获`
+- `b260c42 fix: 跳过企微登录二维码占位小图`
+- `e410878 fix: 调整企微服务商登录恢复通知文案`
+
+Windows Server 已完成端到端只读验证：
+
+```text
+QR_CAPTURED <WECOM_QR_ARTIFACT_DIR>/wecom-login-qr-*.png
+QR_NOTIFIED
+COOKIE_REFRESHED True
+COOKIE_FILE_EXISTS True
+COOKIE_FILE_SIZE > 0
+LOGIN_STATUS restored
+REASON readonly_api_ok
+```
+
+验证结论：
+
+- 二维码 artifact 可在 `.local/wecom-login-qr` 生成。
+- 企微群机器人可收到 markdown/text/image 通知。
+- 管理员扫码后可从固定 browser profile 导出企微后台 Cookie。
+- Cookie 可写入 `WECOM_ADMIN_COOKIE_FILE`。
+- 企微服务商后台只读接口验证返回 `readonly_api_ok`。
+- 第一版恢复后只进入 `ready_for_real_bind` / `manual_confirm_required` 等待后续确认，不默认真实绑定写入。
+
+## 本阶段目标与完成情况
 
 实现“企微后台登录态恢复自动化”的第一版闭环：
 
-1. CSM_C360 接收 `wecom_bind_service` 请求。
-2. Windows worker 执行真实只读预检。
+1. CSM_C360 接收 `wecom_bind_service` 请求。状态：已具备 worker 长连接和任务 handler 骨架。
+2. Windows worker 执行真实只读预检。状态：已具备只读预检和登录态恢复衔接。
 3. 如果预检遇到 `wecom_session_expired / outsession`：
-   - worker 自动打开企微开发者后台登录页；
+   - worker 自动打开企微服务商后台登录页；
    - 截取或提取登录二维码；
    - 通过企微群机器人发送二维码和任务上下文；
    - 任务进入 `waiting_login` 或等价等待状态。
-4. 管理员扫码后，worker 自动判断登录态是否恢复。
-5. 登录恢复后，worker 自动重新跑只读预检。
-6. 预检达到 `ok` 或 `review` 后，任务进入下一状态。
+   状态：已实现并通过手动闭环验证。
+4. 管理员扫码后，worker 自动判断登录态是否恢复。状态：已通过只读接口 `readonly_api_ok` 验证。
+5. 登录恢复后，worker 自动重新跑只读预检。状态：已在编排骨架中实现。
+6. 预检达到 `ok` 或 `review` 后，任务进入下一状态。状态：已映射为 `ready_for_real_bind` / `manual_confirm_required`。
 
 第一版不要求真实绑定写入全自动执行；真实写入仍应保留显式确认或独立开关。
 
@@ -174,36 +207,48 @@ WECOM_ADMIN_COOKIE_FILE=.local/wecom-admin.cookie
 - worker 发送的诊断信息必须脱敏。
 - 登录恢复后仍先跑只读预检，不直接执行真实写入。
 
-## 建议实现拆分
+## 实现拆分与当前状态
 
 ### Task 1：通知模块抽象
 
-- 从旧 `RPA.py` 提炼企微群机器人发送模式。
-- 新增独立通知模块，支持 markdown/text/image。
-- 测试 base64/md5 生成、payload 格式、webhook 不落日志。
+状态：已完成。
+
+- 已新增独立通知模块，支持 markdown/text/image。
+- 已测试 base64/md5 生成、payload 格式、webhook 不进入 payload 或返回值。
+- 未 import 或修改旧 `RPA.py`。
 
 ### Task 2：企微登录态检测与二维码采集
 
-- 新增登录态检查器，调用只读接口判定 cookie 是否有效。
-- 新增二维码采集器，打开企微开发者后台登录页并截取二维码。
+状态：已完成。
+
+- 已新增登录态检查器，调用只读接口判定 cookie 是否有效。
+- 已新增二维码采集器，打开企微服务商后台登录页并截取二维码。
+- 已支持 iframe 中二维码捕获，并跳过尺寸过小的 loading/占位图。
 - 二维码只保存到本地短期 artifact 目录。
 
 ### Task 3：worker 真实预检 handler
 
-- 将 `wecom_bind_service` 从模拟 handler 扩展为真实只读预检模式。
-- 遇到 `wecom_session_expired` 时进入 `waiting_login`。
-- 发送二维码通知并开始轮询登录态恢复。
+状态：第一版骨架已完成。
+
+- 遇到 `wecom_session_expired` 时可发送二维码通知并轮询登录态恢复。
+- 当前恢复后最多进入 `ready_for_real_bind` / `manual_confirm_required`，不默认真实写入。
+- 真实 worker 任务流和控制面队列策略仍建议下一阶段单独验证。
 
 ### Task 4：恢复后自动重试预检
 
-- 扫码恢复后重跑只读预检。
-- 成功后上报 `task.completed` 或 `manual_review` 状态。
-- 失败或超时上报可读错误。
+状态：编排骨架已完成，生产队列策略待优化。
+
+- 扫码恢复后已支持重跑只读预检。
+- `ok` 映射为 `ready_for_real_bind`，`review` 映射为 `manual_confirm_required`。
+- 管理员超时未扫码后的重新触发二维码策略待下一阶段设计。
 
 ### Task 5：控制面状态与可观测性
 
-- CSM_C360 记录 `waiting_login`、通知时间、worker_id、最后错误。
-- 保留任务查询证据，方便排障。
+状态：待下一阶段。
+
+- 需要明确未登录时 worker 队列是否暂停，以及恢复登录后如何继续处理积压任务。
+- 需要明确 `waiting_login`、二维码通知时间、过期时间、重试次数和最后错误在 CSM_C360 的记录方式。
+- 需要明确超时未扫码时如何重新触发扫码通知，避免无限刷屏。
 
 ## 不做的事
 
@@ -231,13 +276,26 @@ docs/superpowers/handoff/2026-06-16-rpa-platform-service-boundary-handoff.md
 docs/superpowers/handoff/2026-06-16-rpa-platform-wecom-bind-real-success-handoff.md
 ```
 
-建议新会话从 Task 1 和 Task 2 开始，不先碰真实写入。
+建议新会话从“队列暂停/恢复策略”和“超时未扫码后的重新触发策略”开始，不先碰真实写入。
+
+已知待优化点：
+
+- 手动 PowerShell inline 脚本可能导致中文客户名显示为 `????`；生产路径应保证 WebSocket JSON、worker env 和 Python 源文件均为 UTF-8。
+- 管理员超过 `WECOM_QR_TTL_SECONDS` 未扫码时，需要定义重新通知入口、最大通知次数和任务状态。
+- 未登录期间，队列应暂停还是只暂停同类企微绑定任务，需要结合 CSM_C360 控制面状态机设计。
+- 登录恢复后如何自动唤醒队列并重试只读预检，需要下一阶段补端到端任务流验证。
 
 ## 相关代码文件/模块
 
 - `rpa_platform/worker/c360_worker.py`
 - `rpa_platform/worker/c360_worker_runtime.py`
+- `rpa_platform/worker/wecom_login_recovery.py`
+- `rpa_platform/worker/wecom_bind_recovery_handler.py`
+- `rpa_platform/notifications/wecom_bot.py`
 - `rpa_platform/worker/simulated_handlers.py`
+- `tests/test_platform_wecom_login_recovery.py`
+- `tests/test_platform_wecom_bot.py`
+- `tests/test_platform_wecom_bind_recovery_handler.py`
 - `scripts/dev/check_wecom_bind_real_readonly.py`
 - `scripts/dev/run_wecom_bind_real_write.py`
 - `RPA.py`

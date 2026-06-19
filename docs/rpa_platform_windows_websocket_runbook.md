@@ -324,6 +324,39 @@ python -m pytest \
 - 登录恢复后自动重跑只读预检；`ok` 映射为 `ready_for_real_bind`，`review` 映射为 `manual_confirm_required`。
 - 输出不包含真实 CorpID、Cookie、Token、Webhook 或二维码原始内容。
 
+### 6.3.3 企微服务商后台扫码恢复里程碑
+
+截至 2026-06-19，Windows Server 已完成一次端到端只读验证：
+
+```text
+QR_CAPTURED <WECOM_QR_ARTIFACT_DIR>/wecom-login-qr-*.png
+QR_NOTIFIED
+COOKIE_REFRESHED True
+COOKIE_FILE_EXISTS True
+COOKIE_FILE_SIZE > 0
+LOGIN_STATUS restored
+REASON readonly_api_ok
+```
+
+该结果表示：
+
+- worker 能在企微服务商后台登录页的 iframe 中截取真实二维码，并跳过 loading/占位小图。
+- 企微群机器人能收到 markdown/text/image 通知。
+- 管理员扫码后，同一浏览器 profile 能导出企微后台 Cookie。
+- `WECOM_ADMIN_COOKIE_FILE` 能更新，且只读接口 `/wwopen/developer/customApp/tpl/app/list` 返回有效 JSON。
+- 恢复登录态的权威判断为 `LOGIN_STATUS restored` 和 `REASON readonly_api_ok`，不是二维码是否消失。
+
+手动验证时，如果 PowerShell here-string 或管道导致通知中的中文客户名显示为 `????`，优先按编码问题处理；生产 WebSocket JSON 和 Python 文件应保持 UTF-8。后续如继续使用 PowerShell inline 脚本验证，建议使用 UTF-8 保存的 `.py` 文件或先显式设置控制台/进程编码。
+
+本里程碑仍不包含：
+
+- 企微真实绑定写入。
+- 简道云写入。
+- 管理员超时未扫码后的重新触发策略。
+- 未登录期间 worker 队列暂停和恢复策略。
+
+这些项作为下一阶段优化单独开会话处理。
+
 ### 6.4 断线恢复验证
 
 1. 下发一条 fake 任务。
