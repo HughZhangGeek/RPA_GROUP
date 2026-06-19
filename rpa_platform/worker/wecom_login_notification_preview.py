@@ -7,6 +7,7 @@ from rpa_platform.worker.wecom_login_recovery import build_wecom_qr_login_markdo
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    _configure_stdout_utf8()
     parser = argparse.ArgumentParser(
         description="Build a local UTF-8 WeCom login notification preview without sending webhook requests."
     )
@@ -25,6 +26,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2))
     sys.stdout.write("\n")
     return 0
+
+
+def _configure_stdout_utf8() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
 
 
 if __name__ == "__main__":

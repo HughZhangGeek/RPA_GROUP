@@ -401,6 +401,41 @@ class WecomQrLoginNotifierTest(unittest.TestCase):
 
 
 class WecomLoginNotificationPreviewCliTest(unittest.TestCase):
+    def test_preview_main_reconfigures_stdout_to_utf8_for_windows_pipes(self):
+        from rpa_platform.worker import wecom_login_notification_preview
+
+        class FakeStdout:
+            def __init__(self):
+                self.encoding = None
+                self.chunks = []
+
+            def reconfigure(self, *, encoding):
+                self.encoding = encoding
+
+            def write(self, chunk):
+                self.chunks.append(chunk)
+
+        fake_stdout = FakeStdout()
+        original_stdout = sys.stdout
+        try:
+            sys.stdout = fake_stdout
+            code = wecom_login_notification_preview.main(
+                [
+                    "--task-id",
+                    "task-utf8",
+                    "--enterprise-name",
+                    "上海测试客户",
+                    "--expires-at",
+                    "1000",
+                ]
+            )
+        finally:
+            sys.stdout = original_stdout
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake_stdout.encoding, "utf-8")
+        self.assertIn("上海测试客户", "".join(fake_stdout.chunks))
+
     def test_utf8_preview_preserves_chinese_customer_name(self):
         completed = subprocess.run(
             [
