@@ -448,6 +448,125 @@ python -m rpa_platform.worker.wecom_login_notification_preview --task-id task-ut
 
 这些项作为下一阶段优化单独开会话处理。
 
+### 6.3.4 真实只读 handler 接入验证
+
+截至 2026-06-20，本仓库已将 CSM_C360 worker 的 handler 路由改为：
+
+```text
+RPA_WORKER_SIMULATE=true
+-> diagnostics / runtime_health_check / wecom_bind_service 均保持 simulation 行为
+
+RPA_WORKER_SIMULATE=false
+-> diagnostics / runtime_health_check 仍走安全模拟诊断
+-> wecom_bind_service 走 WecomBindRecoveryTaskHandler
+-> 只执行真实只读预检、QR 登录恢复、cookie 刷新和事件上报
+```
+
+本地测试覆盖：
+
+```bash
+python -m pytest \
+  tests/test_platform_c360_worker_runtime.py \
+  tests/test_platform_c360_worker_client.py \
+  tests/test_platform_c360_task_handlers.py \
+  tests/test_platform_wecom_bind_recovery_handler.py \
+  tests/test_platform_wecom_bind_real_recovery.py \
+  tests/test_platform_wecom_login_recovery.py \
+  tests/test_platform_wecom_bot.py
+```
+
+Windows Server 真实只读验证仍必须在本机执行，路径固定为：
+
+```powershell
+conda activate RPA_GROUP
+cd C:\rpa_work\RPA_GROUP
+```
+
+安全环境变量示例：
+
+```powershell
+$env:C360_BASE_URL="https://jdycsm.sre.jdydevelop.com/csm-c360-api"
+$env:RPA_WORKER_ID="win-server-001"
+$env:RPA_WORKER_SIMULATE="false"
+$env:RPA_WORKER_CAPABILITIES="wecom_bind_service,diagnostics,runtime_health_check"
+$env:WECOM_LOGIN_RECOVERY_ENABLED="true"
+$env:WECOM_QR_NOTIFY_ENABLED="true"
+$env:WECOM_QR_TTL_SECONDS="120"
+$env:WECOM_QR_MAX_NOTIFY_TIMES="3"
+$env:WECOM_QR_ARTIFACT_DIR="C:\rpa_work\RPA_GROUP\.local\wecom-login-qr"
+$env:WECOM_ADMIN_COOKIE_FILE="C:\rpa_work\RPA_GROUP\.local\wecom-admin.cookie"
+$env:WECOM_BROWSER_PROFILE_DIR="C:\rpa_work\RPA_GROUP\.local\wecom-bind-browser-profile"
+$env:WECOM_LOGIN_RECOVERY_NODE_WORK_DIR="C:\rpa_work\RPA_GROUP\.local\playwright-wecom-login-recovery"
+```
+
+以下敏感值只允许保存在 Windows 本机环境，不写入 Git、文档、聊天、PR 或日志摘录：
+
+```text
+RPA_WORKER_TOKEN
+JDY_ADMIN_COOKIE_FILE 或 JDY_ADMIN_COOKIE
+WECOM_QR_NOTIFY_WEBHOOK_URL
+```
+
+启动 worker：
+
+```powershell
+python -m rpa_platform.worker.c360_worker --once --verbose
+```
+
+预期启动输出：
+
+```text
+worker connecting worker_id=win-server-001 ws_url=wss://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/ws simulate=False
+worker hello sent worker_id=win-server-001 simulate=False
+worker accepted worker_id=win-server-001
+```
+
+派发 `wecom_bind_service` 真实只读任务后，成功恢复路径的本机输出应包含：
+
+```text
+task progress task_id={TASK_ID} status=running
+task progress task_id={TASK_ID} status=readonly_preflight_started
+task progress task_id={TASK_ID} status=readonly_preflight_completed
+task completed task_id={TASK_ID} status=ready_for_real_bind
+```
+
+需要扫码路径的本机输出应包含：
+
+```text
+task progress task_id={TASK_ID} status=waiting_login
+task completed task_id={TASK_ID} status=manual_action_required
+```
+
+控制面事件查询应看到实际发生过的步骤：
+
+```text
+running
+readonly_preflight_started
+waiting_login
+readonly_preflight_completed
+ready_for_real_bind
+```
+
+只记录脱敏 proof 字符串：
+
+```text
+TASK_RECEIVED
+READONLY_PREFLIGHT_STARTED
+WAITING_LOGIN
+QR_NOTIFIED
+LOGIN_STATUS restored
+READONLY_PREFLIGHT_COMPLETED
+TASK_COMPLETED ready_for_real_bind
+EVENT_HISTORY_STORED
+```
+
+真实只读 handler 验证仍不包含：
+
+- 企微真实绑定写入。
+- 简道云写入。
+- 修改、导入、重启或部署旧线上 `RPA.py`。
+- 提交真实 webhook、Cookie、Token、QR 图片、截图、日志或数据库内容。
+
 ### 6.4 断线恢复验证
 
 1. 下发一条 fake 任务。
