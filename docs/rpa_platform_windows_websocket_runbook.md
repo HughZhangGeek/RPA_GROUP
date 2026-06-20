@@ -1,6 +1,6 @@
 # RPA 平台 Windows WebSocket 部署 Runbook
 
-状态：2026-06-18 草案
+状态：2026-06-20 阶段性验证版
 适用范围：Windows RPA 执行服务反连 jdycsm 控制面
 非目标：不部署旧 `RPA.py`，不开放 Windows 入站业务接口，不把 Cookie 或密钥明文上传到 jdycsm
 
@@ -168,6 +168,41 @@ readonly preflight 返回 wecom_session_expired
 
 企微登录页当前会把真实二维码放在 `.wwLogin_qrcode_iframe` iframe 内；provider 会先查主页面，再扫描子 frame，并跳过尺寸过小的 loading/占位图片。如果 Playwright 仍无法识别二维码元素，应先在 Windows 本机打开企微登录页确认 DOM，再通过 `WECOM_QR_SELECTOR` 调整选择器。不要把页面 HTML、截图原图、Cookie 或 webhook 贴到聊天、PR 或文档。
 
+### 3.3 当前任务保存边界和事件保存
+
+截至 2026-06-20，CSM_C360 控制面已经保存 RPA 任务主记录，并已新增 `rpa_task_events` 或等价事件流保存能力。Windows worker `--verbose` 可在本机 PowerShell 打印生命周期；控制面可通过事件查询接口验证 `task.dispatch -> task.accepted -> task.progress -> task.completed` 顺序。
+
+控制面 `rpa_tasks` 会保存：
+
+- 任务身份：`task_id`、`task_type`、`idempotency_key`、`route_key`
+- 来源信息：`source_type`、`source_app_id`、`source_form_id`、`source_entry_id`、`source_data_id`
+- 请求和归一化数据：`request_json`、`normalized_json`
+- 执行结果：`status`、`worker_id`、`result_json`、`error_message`
+- 时间戳：`created_at`、`dispatched_at`、`started_at`、`finished_at`、`updated_at`
+
+控制面 `rpa_task_events` 会保存：
+
+- 控制面派发的 `task.dispatch`
+- worker 回传的 `task.accepted`、`task.progress`、`task.completed`
+- 多条 progress 的时间序列
+- `event_json` 中的原始控制面/worker 事件 payload
+
+事件查询接口：
+
+```text
+GET /v1/rpa/tasks/{task_id}/events
+```
+
+用户已确认事件流中执行日志和每一步骤情况可以原样保存，不用脱敏。边界是：`rpa_task_events.event_json` 保存控制面下发和 worker 回传的原始 JSON；`rpa_tasks.result_json` 继续保持现有摘要/清洗策略，避免影响已有列表和任务详情兼容性。
+
+CSM_C360 事件持久化已经通过生产 simulation 验证。下一阶段进入 RPA_GROUP 真实企微只读 handler 接入阶段。执行计划：
+
+```text
+docs/superpowers/plans/2026-06-20-rpa-wecom-real-handler-integration.md
+```
+
+该阶段仍不打开真实绑定写入，只把 `RPA_WORKER_SIMULATE=false` 的 `wecom_bind_service` 接到真实只读预检、QR 登录恢复和步骤事件上报。
+
 ## 4. 首次部署步骤
 
 ### 4.1 jdycsm 侧准备
@@ -270,7 +305,7 @@ python scripts/dev/run_platform_worker_once.py
 2. 启动：
 
 ```powershell
-python -m rpa_platform.worker.c360_worker --once
+python -m rpa_platform.worker.c360_worker --once --verbose
 ```
 
 3. 预期 worker 首包发送：
@@ -300,6 +335,48 @@ task.accepted -> task.progress -> task.completed
 7. 通过控制面任务查询确认 `status=succeeded`、`result_json.simulated=true`、`worker_id` 等于当前 worker。
 
 如果没有可用 token 或公网 WSS 不通，不要把 token 粘贴到聊天、文档、日志或 PR；保留本地 fake transport 测试结果和阻塞原因即可。
+
+2026-06-20 已验证的公网 WSS 模拟结果：
+
+```text
+worker connecting worker_id=win-server-001 ws_url=wss://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/ws simulate=True
+worker hello sent worker_id=win-server-001 simulate=True
+worker accepted worker_id=win-server-001
+task received task_id=5a4410adb49f413ea0db5d36314652cf task_type=wecom_bind_service simulate=True
+task accepted task_id=5a4410adb49f413ea0db5d36314652cf
+task progress task_id=5a4410adb49f413ea0db5d36314652cf status=running
+task completed task_id=5a4410adb49f413ea0db5d36314652cf status=succeeded
+```
+
+控制面事件查询：
+
+```text
+task_id=5a4410adb49f413ea0db5d36314652cf
+status=succeeded
+worker_id=win-server-001
+result_simulated=true
+event_count=4
+event_types=task.dispatch,task.accepted,task.progress,task.completed
+event_order_valid=true
+```
+
+查询方式：
+
+```bash
+cd /Users/hugh/jdycsm_project/CSM_C360
+PYTHONPATH=src:. python scripts/manual/query_rpa_task_events.py \
+  --base-url https://jdycsm.sre.jdydevelop.com/csm-c360-api \
+  --task-id 5a4410adb49f413ea0db5d36314652cf \
+  --expect-simulated \
+  --expect-event-order
+```
+
+这次验证仍是 simulation only：
+
+- 不执行真实企微绑定写入。
+- 不写简道云。
+- 不打开真实绑定浏览器流程。
+- 不修改或重启旧线上 `RPA.py`。
 
 ### 6.3.2 企微登录态恢复骨架验证
 
@@ -706,6 +783,15 @@ heartbeat 超过 45 秒未更新
 - 截图原图默认只存在 Windows 本地。
 - jdycsm 上只保存 artifact 索引和脱敏摘要。
 - 所有写入类任务必须有 `idempotency_key`。
+
+### 11.1 原始事件保存的例外说明
+
+为满足任务执行审计和每一步骤排查，CSM_C360 已增加 `rpa_task_events.event_json` 原始事件保存。用户已确认该事件流不用脱敏、原样保存；因此该例外应限定在事件表中：
+
+- `rpa_task_events.event_json` 保存控制面下发和 worker 回传的原始 JSON。
+- `rpa_tasks.result_json` 继续保持现有任务摘要行为。
+- 文档、Git、PR、聊天记录仍不写真实 cookie、token、webhook、二维码原图。
+- 真实写入类任务仍必须先经过只读预检和显式开关，不因事件保存而自动启用。
 
 ## 12. 相关代码文件/模块
 

@@ -3,8 +3,8 @@
 ## 生命周期
 
 - 状态：阶段性完成
-- 当前阶段：企微服务商后台登录态恢复只读闭环已实现并完成 Windows 验证
-- 最近更新：2026-06-19
+- 当前阶段：企微服务商后台登录态恢复只读闭环已完成；CSM_C360 原始事件持久化已完成并通过 Windows worker simulation 生产复验；下一阶段接入真实企微只读 handler
+- 最近更新：2026-06-20
 - 仓库：`/Users/hugh/jdycsm_project/RPA_GROUP`
 - Windows Server 路径：`C:\rpa_work\RPA_GROUP`
 - 分支：`feat/windows-websocket-worker`
@@ -104,6 +104,105 @@ REASON readonly_api_ok
 - Cookie 可写入 `WECOM_ADMIN_COOKIE_FILE`。
 - 企微服务商后台只读接口验证返回 `readonly_api_ok`。
 - 第一版恢复后只进入 `ready_for_real_bind` / `manual_confirm_required` 等待后续确认，不默认真实绑定写入。
+
+### 5. CSM_C360 到 Windows worker 模拟派发和事件持久化已生产复验
+
+本阶段新增并推送了三个优化提交：
+
+- `8eb9980 feat: 优化企微登录恢复重试和队列状态`
+- `08d7491 fix: 修复 Windows 预览输出编码`
+- `2c214dd feat: 增加 C360 worker 脱敏日志输出`
+
+Windows Server 在 Conda 环境 `RPA_GROUP` 中运行：
+
+```powershell
+conda activate RPA_GROUP
+cd C:\rpa_work\RPA_GROUP
+python -m rpa_platform.worker.c360_worker --once --verbose
+```
+
+控制面派发一条 `zh_test` 的 `wecom_bind_service` 模拟任务后，Windows PowerShell 已观察到完整生命周期。当前 Windows App 键盘输入会吞掉 `_` 等字符，实际操作时可用 PowerShell 历史 `h` / `r <编号>` 重放已验证命令，避免手输模块名：
+
+```text
+worker connecting worker_id=win-server-001 ws_url=wss://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/ws simulate=True
+worker hello sent worker_id=win-server-001 simulate=True
+worker accepted worker_id=win-server-001
+task received task_id=5a4410adb49f413ea0db5d36314652cf task_type=wecom_bind_service simulate=True
+task accepted task_id=5a4410adb49f413ea0db5d36314652cf
+task progress task_id=5a4410adb49f413ea0db5d36314652cf status=running
+task completed task_id=5a4410adb49f413ea0db5d36314652cf status=succeeded
+```
+
+CSM_C360 控制面事件查询结果：
+
+```text
+task_id=5a4410adb49f413ea0db5d36314652cf
+task_type=wecom_bind_service
+status=succeeded
+worker_id=win-server-001
+result_simulated=true
+event_count=4
+event_types=task.dispatch,task.accepted,task.progress,task.completed
+event_order_valid=true
+```
+
+本次查询方式：
+
+```bash
+cd /Users/hugh/jdycsm_project/CSM_C360
+PYTHONPATH=src:. python scripts/manual/query_rpa_task_events.py \
+  --base-url https://jdycsm.sre.jdydevelop.com/csm-c360-api \
+  --task-id 5a4410adb49f413ea0db5d36314652cf \
+  --expect-simulated \
+  --expect-event-order
+```
+
+当前 `python -m rpa_platform.worker.c360_worker --once --verbose` 仍是模拟 handler：
+
+- 会验证 WebSocket 连接、鉴权、任务派发、accepted/progress/completed 回传、控制面任务主记录落库和事件表查询。
+- 不执行真实企微绑定写入。
+- 不写简道云。
+- 不打开真实绑定浏览器流程。
+- 不修改旧线上 `RPA.py`。
+
+### 6. 当前执行情况保存方式
+
+截至 2026-06-20，CSM_C360 控制面已经保存任务主记录，并已保存每一步原始事件历史。
+
+当前已保存到 `rpa_tasks` 的内容包括：
+
+- `task_id`
+- `task_type`
+- `source_type` / `source_app_id` / `source_form_id` / `source_entry_id` / `source_data_id`
+- `route_key`
+- `status`
+- `idempotency_key`
+- `request_json`
+- `normalized_json`
+- `result_json`
+- `api_key_fingerprint`
+- `worker_id`
+- `error_message`
+- `dispatched_at`
+- `started_at`
+- `finished_at`
+- `created_at` / `updated_at`
+
+当前状态流转由 CSM_C360 控制面处理：
+
+- 创建任务时写入 `status=queued`。
+- 派发给 worker 时写入 `status=dispatched`、`worker_id`、`dispatched_at`。
+- 收到 `task.accepted` 或 `task.progress` 时写入 `status=running`，并补 `started_at`。
+- 收到 `task.completed` 时写入 `status=succeeded` 或 `status=failed`，并保存 `result_json`、`error_message`、`finished_at`。
+
+当前已保存到 `rpa_task_events` 或等价事件表的内容包括：
+
+- `task.dispatch` 控制面下发事件。
+- `task.accepted`、`task.progress`、`task.completed` 每条 WebSocket 消息的原始 JSON。
+- 多条 progress 的时间序列。
+- 细粒度步骤开始、步骤完成、步骤失败、重试、二维码通知、等待扫码等事件历史的承载入口。
+
+用户已确认事件表中“执行日志/每一步骤情况不用脱敏，原样保存即可”。当前边界是：`rpa_task_events.event_json` 保存原始 JSON；`rpa_tasks` 主记录继续用于列表、筛选和最终状态查询。
 
 ## 本阶段目标与完成情况
 
@@ -248,11 +347,12 @@ WECOM_ADMIN_COOKIE_FILE=.local/wecom-admin.cookie
 
 ### Task 5：控制面状态与可观测性
 
-状态：worker 事件契约已定义，控制面联动待下一阶段。
+状态：worker 结果契约、本机 verbose 可观测性、控制面原始事件持久化均已完成生产 simulation 验证。
 
 - 未登录期间第一版建议暂停同类 `wecom_bind_service` 队列，不暂停诊断类任务，也不触碰旧 `RPA.py` 队列。
 - `waiting_login`、二维码过期时间、通知次数、剩余次数和下一步动作已由 worker result/progress 提供给 CSM_C360 消费。
-- CSM_C360 如何把这些字段落入 `rpa_tasks` / 人工处理单、如何恢复积压任务，仍需在 CSM_C360 仓库单独实现。
+- CSM_C360 当前会保存任务主记录、最终 `result_json`，并保存每条 dispatch/accepted/progress/completed 的原始事件历史。
+- 下一阶段继续做 RPA_GROUP 真实企微只读 handler 接入；人工处理单、同类队列暂停/恢复和积压任务恢复仍可后续补齐。
 - 超时未扫码时队列保持暂停；仍有剩余通知次数则允许重新触发 QR，次数耗尽后进入人工升级。
 
 ## 不做的事
@@ -281,7 +381,21 @@ docs/superpowers/handoff/2026-06-16-rpa-platform-service-boundary-handoff.md
 docs/superpowers/handoff/2026-06-16-rpa-platform-wecom-bind-real-success-handoff.md
 ```
 
-建议新会话从 CSM_C360 控制面消费 `queue_control` 和 `notify_attempts` 开始，不先碰真实写入。
+CSM_C360 控制面“原始事件持久化”已完成并通过生产 simulation 复验。下一阶段从 RPA_GROUP 真实企微只读 handler 接入开始，不先碰真实写入。执行计划已写入：
+
+```text
+docs/superpowers/plans/2026-06-20-rpa-wecom-real-handler-integration.md
+```
+
+进入该计划前的已满足前置条件：
+
+1. CSM_C360 已新增 `rpa_task_events` 或等价事件表。
+2. 控制面派发 `task.dispatch` 时已保存原始下发 payload。
+3. worker 回传 `task.accepted`、`task.progress`、`task.completed` 时已保存原始 WebSocket JSON。
+4. `GET /v1/rpa/tasks/{task_id}/events` 和 `scripts/manual/query_rpa_task_events.py` 可查询事件列表。
+5. Windows worker `--once --verbose` 已用 `task_id=5a4410adb49f413ea0db5d36314652cf` 验证事件顺序。
+
+该计划的目标是把 `c360_worker` 从纯模拟 `wecom_bind_service` 接到真实 `WecomBindRecoveryTaskHandler`，但仍只跑只读预检、QR 登录恢复和状态上报；真实企微绑定写入、简道云写入继续保持关闭，等待用户单独确认。
 
 已知待优化点：
 
@@ -296,6 +410,7 @@ python -m rpa_platform.worker.wecom_login_notification_preview --task-id task-ut
 
 - CSM_C360 需要消费 `queue_control.action=pause/resume`、`scope=wecom_bind_service`、`notify_attempts`、`remaining_notify_attempts`、`next_action` 和 `retry_after`。
 - 登录恢复后如何自动唤醒控制面同类队列并重试只读预检，需要下一阶段补端到端任务流验证。
+- RPA_GROUP 当前 `c360_worker` 仍使用模拟 handler；接入真实 `WecomBindRecoveryTaskHandler` 和真实写入开关要在事件持久化完成后单独推进。
 
 ## 相关代码文件/模块
 
@@ -314,3 +429,5 @@ python -m rpa_platform.worker.wecom_login_notification_preview --task-id task-ut
 - `RPA.py`
 - `docs/rpa_platform_windows_websocket_protocol.md`
 - `docs/rpa_platform_windows_websocket_runbook.md`
+- `docs/superpowers/plans/2026-06-20-rpa-task-raw-event-persistence.md`
+- `docs/superpowers/plans/2026-06-20-rpa-wecom-real-handler-integration.md`
