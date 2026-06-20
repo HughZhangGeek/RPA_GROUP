@@ -8,8 +8,8 @@ from rpa_platform.worker.c360_worker_client import (
     build_default_diagnostics,
     load_c360_worker_config_from_env,
 )
+from rpa_platform.worker.c360_task_handlers import build_c360_task_handlers
 from rpa_platform.worker.c360_worker_runtime import C360WorkerRuntime, connect_json_transport
-from rpa_platform.worker.simulated_handlers import SimulatedTaskHandlers
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[Mapping[str, str]] = None) -> int:
@@ -39,7 +39,7 @@ async def _run(config, event_logger=None) -> None:
     runtime = C360WorkerRuntime(
         config=config,
         transport=transport,
-        handlers=SimulatedTaskHandlers(diagnostics),
+        handlers=build_c360_task_handlers(config, diagnostics),
         diagnostics=diagnostics,
         event_logger=event_logger,
     )
