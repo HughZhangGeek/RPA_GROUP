@@ -22,13 +22,13 @@ class FakeTransport:
 
 
 class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    def _config(self):
+    def _config(self, simulate=True):
         return load_c360_worker_config_from_env(
             {
                 "C360_BASE_URL": "http://127.0.0.1:3601",
                 "RPA_WORKER_TOKEN": "secret-token",
                 "RPA_WORKER_ID": "win-sim-001",
-                "RPA_WORKER_SIMULATE": "true",
+                "RPA_WORKER_SIMULATE": "true" if simulate else "false",
             }
         )
 
@@ -162,6 +162,55 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.sent[-1]["type"], "task.completed")
         self.assertEqual(transport.sent[-1]["status"], "manual_action_required")
         self.assertEqual(transport.sent[-1]["result"]["manual_action"], "scan_wecom_admin_qr")
+
+    async def test_non_simulate_wecom_handler_progress_is_sent_before_completed(self):
+        class RealReadonlyHandlers:
+            async def handle(self, dispatch):
+                return WorkerTaskResult(
+                    status="ready_for_real_bind",
+                    result={"status": "ready_for_real_bind", "reason": "ready_for_confirm_write"},
+                    progress=[
+                        {"status": "readonly_preflight_started", "message": "wecom bind readonly preflight started"},
+                        {
+                            "status": "readonly_preflight_completed",
+                            "message": "wecom bind readonly preflight completed",
+                            "queue_control": {"action": "resume", "scope": "wecom_bind_service"},
+                        },
+                    ],
+                )
+
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-server-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-real",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": False,
+                    "payload": {"task_type": "wecom_bind_service", "enterprise_name": "zh_test_上海测试客户"},
+                },
+            ]
+        )
+
+        runtime = C360WorkerRuntime(config=self._config(simulate=False), transport=transport, handlers=RealReadonlyHandlers())
+
+        await runtime.run_until_idle()
+
+        sent_after_hello = transport.sent[1:]
+        self.assertEqual(
+            [item["type"] for item in sent_after_hello],
+            [
+                "task.accepted",
+                "task.progress",
+                "task.progress",
+                "task.progress",
+                "task.completed",
+            ],
+        )
+        self.assertEqual(sent_after_hello[2]["status"], "readonly_preflight_started")
+        self.assertEqual(sent_after_hello[3]["status"], "readonly_preflight_completed")
+        self.assertEqual(sent_after_hello[-1]["status"], "ready_for_real_bind")
 
     async def test_verbose_logger_reports_lifecycle_without_sensitive_payload(self):
         events = []
