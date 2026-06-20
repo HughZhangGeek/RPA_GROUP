@@ -49,8 +49,9 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
                 "resume_when": "wecom_login_restored",
             },
         )
-        self.assertEqual(result.progress[0]["status"], "waiting_login")
-        self.assertEqual(result.progress[0]["queue_control"]["action"], "pause")
+        self.assertEqual(result.progress[0]["status"], "readonly_preflight_started")
+        self.assertEqual(result.progress[-1]["status"], "waiting_login")
+        self.assertEqual(result.progress[-1]["queue_control"]["action"], "pause")
         self.assertEqual(recovery.calls[0]["task_id"], "task-001")
         self.assertEqual(recovery.calls[0]["context"]["enterprise_name"], "上海测试客户")
         self.assertNotIn("corp-id-placeholder", str(result))
@@ -79,8 +80,9 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.result["status"], "login_recovery_notify_exhausted")
         self.assertEqual(result.result["manual_action"], "manual_escalation_required")
         self.assertEqual(result.result["queue_control"]["action"], "pause")
-        self.assertEqual(result.progress[0]["status"], "login_recovery_notify_exhausted")
-        self.assertEqual(result.progress[0]["queue_control"]["scope"], "wecom_bind_service")
+        self.assertEqual(result.progress[0]["status"], "readonly_preflight_started")
+        self.assertEqual(result.progress[-1]["status"], "login_recovery_notify_exhausted")
+        self.assertEqual(result.progress[-1]["queue_control"]["scope"], "wecom_bind_service")
 
     async def test_ready_for_real_bind_remains_pending_manual_confirmation(self):
         recovery = FakeRecovery(
@@ -110,9 +112,68 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
                 "resume_reason": "wecom_login_restored",
             },
         )
-        self.assertEqual(result.progress[0]["status"], "ready_for_real_bind")
-        self.assertEqual(result.progress[0]["queue_control"]["action"], "resume")
+        self.assertEqual(result.progress[0]["status"], "readonly_preflight_started")
+        self.assertEqual(result.progress[-1]["status"], "readonly_preflight_completed")
+        self.assertEqual(result.progress[-1]["queue_control"]["action"], "resume")
         self.assertNotIn("corp-id-placeholder", str(result))
+
+    async def test_ready_for_real_bind_reports_preflight_step_progress(self):
+        recovery = FakeRecovery(
+            {
+                "status": "ready_for_real_bind",
+                "reason": "ready_for_confirm_write",
+                "preflight": {"status": "ok", "reason": "ready_for_confirm_write"},
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-progress",
+                "task_type": "wecom_bind_service",
+                "payload": {"enterprise_name": "上海测试客户", "plain_corp_id": "corp-id-placeholder"},
+            }
+        )
+
+        self.assertEqual(
+            [item["status"] for item in result.progress],
+            [
+                "readonly_preflight_started",
+                "readonly_preflight_completed",
+            ],
+        )
+        self.assertEqual(result.progress[-1]["queue_control"]["action"], "resume")
+
+    async def test_waiting_login_reports_preflight_and_queue_pause_steps(self):
+        recovery = FakeRecovery(
+            {
+                "status": "waiting_login",
+                "reason": "wecom_login_not_restored",
+                "expires_at": 1000.0,
+                "notify_attempts": 1,
+                "remaining_notify_attempts": 2,
+                "next_action": "retry_wecom_login_qr",
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-waiting",
+                "task_type": "wecom_bind_service",
+                "payload": {"enterprise_name": "上海测试客户", "plain_corp_id": "corp-id-placeholder"},
+            }
+        )
+
+        self.assertEqual(
+            [item["status"] for item in result.progress],
+            [
+                "readonly_preflight_started",
+                "waiting_login",
+            ],
+        )
+        self.assertEqual(result.progress[-1]["queue_control"]["action"], "pause")
+        self.assertEqual(result.progress[-1]["next_action"], "retry_wecom_login_qr")
 
     async def test_unsupported_task_type_raises_value_error(self):
         handler = WecomBindRecoveryTaskHandler(FakeRecovery({}))
