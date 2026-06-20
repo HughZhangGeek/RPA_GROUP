@@ -94,7 +94,7 @@ $env:RPA_WORKER_TOKEN="<只在本机环境变量中配置>"
 $env:RPA_WORKER_ID="win-sim-001"
 $env:RPA_WORKER_SIMULATE="true"
 $env:RPA_WORKER_CAPABILITIES="wecom_bind_service,diagnostics,runtime_health_check"
-python -m rpa_platform.worker.c360_worker --once
+python -m rpa_platform.worker.c360_worker --once --verbose
 ```
 
 worker 会从 `C360_BASE_URL` 推导 WebSocket 地址：
@@ -116,6 +116,8 @@ ws://127.0.0.1:3601/v1/rpa/workers/ws
 ```
 
 缺少 `RPA_WORKER_TOKEN` 时，入口会返回 blocked/error 并退出；输出不得包含 token、Cookie、headers、Authorization 或浏览器登录态。
+
+`--verbose` 只打印本机脱敏生命周期事件，例如连接、收到任务、发送 progress、发送 completed。它不会打印任务 payload、Cookie、token、webhook、二维码内容或真实客户字段。当前 `c360_worker` 模拟入口不写本地日志文件；权威任务执行记录在 CSM_C360 控制面的 `rpa_tasks` 中，可通过 `GET /v1/rpa/tasks/{task_id}` 查看 `status`、`worker_id`、`result_json`、`error_message`、`created_at`、`dispatched_at`、`started_at`、`finished_at`。
 
 ### 3.2 企微后台登录态恢复配置
 

@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from rpa_platform.worker.c360_worker_client import (
     C360WorkerConfig,
@@ -33,27 +33,41 @@ class C360WorkerRuntime:
         transport: AsyncJsonTransport,
         handlers: Any,
         diagnostics: Optional[Dict[str, Any]] = None,
+        event_logger: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.config = config
         self.transport = transport
         self.handlers = handlers
         self.diagnostics = diagnostics if diagnostics is not None else getattr(handlers, "diagnostics", {})
+        self.event_logger = event_logger
 
     async def run_until_idle(self) -> None:
         await self.transport.send_json(build_worker_hello(self.config, self.diagnostics))
+        self._log("worker hello sent worker_id=%s simulate=%s" % (self.config.worker_id, self.config.simulate))
         while True:
             message = await self.transport.receive_json()
             if message is None:
+                self._log("worker idle")
                 return
             message_type = message.get("type")
             if message_type == "worker.accepted":
+                self._log("worker accepted worker_id=%s" % _safe_text(message.get("worker_id")))
                 continue
             if message_type == "task.dispatch":
+                self._log(
+                    "task received task_id=%s task_type=%s simulate=%s"
+                    % (
+                        _safe_text(message.get("task_id")),
+                        _safe_text(message.get("task_type") or message.get("route_key")),
+                        bool(message.get("simulate")),
+                    )
+                )
                 await self._handle_dispatch(message)
 
     async def _handle_dispatch(self, dispatch: Dict[str, Any]) -> None:
         task_id = str(dispatch.get("task_id", ""))
         await self.transport.send_json({"type": "task.accepted", "task_id": task_id})
+        self._log("task accepted task_id=%s" % _safe_text(task_id))
         await self.transport.send_json(
             {
                 "type": "task.progress",
@@ -62,6 +76,7 @@ class C360WorkerRuntime:
                 "message": "simulated handler started" if self.config.simulate else "handler started",
             }
         )
+        self._log("task progress task_id=%s status=running" % _safe_text(task_id))
         try:
             result = await self.handlers.handle(dispatch)
         except Exception as exc:
@@ -73,12 +88,17 @@ class C360WorkerRuntime:
                     "error_message": _redact_string(str(exc)),
                 }
             )
+            self._log("task completed task_id=%s status=failed" % _safe_text(task_id))
             return
         if isinstance(result, WorkerTaskResult):
             for progress in result.progress:
                 payload = {"type": "task.progress", "task_id": task_id}
                 payload.update(progress)
                 await self.transport.send_json(payload)
+                self._log(
+                    "task progress task_id=%s status=%s"
+                    % (_safe_text(task_id), _safe_text(progress.get("status")))
+                )
             await self.transport.send_json(
                 {
                     "type": "task.completed",
@@ -87,6 +107,7 @@ class C360WorkerRuntime:
                     "result": result.result,
                 }
             )
+            self._log("task completed task_id=%s status=%s" % (_safe_text(task_id), _safe_text(result.status)))
             return
         await self.transport.send_json(
             {
@@ -96,6 +117,15 @@ class C360WorkerRuntime:
                 "result": result,
             }
         )
+        self._log("task completed task_id=%s status=succeeded" % _safe_text(task_id))
+
+    def _log(self, message: str) -> None:
+        if self.event_logger is not None:
+            self.event_logger(_redact_string(message))
+
+
+def _safe_text(value: Any) -> str:
+    return _redact_string(str(value or ""))
 
 
 class WebSocketsJsonTransport:

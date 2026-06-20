@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from rpa_platform.worker.c360_worker_client import load_c360_worker_config_from_env
+from rpa_platform.worker import c360_worker
 from rpa_platform.worker.c360_worker_runtime import AioHttpJsonTransport, C360WorkerRuntime, WorkerTaskResult
 from rpa_platform.worker.simulated_handlers import SimulatedTaskHandlers
 
@@ -160,6 +162,68 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.sent[-1]["type"], "task.completed")
         self.assertEqual(transport.sent[-1]["status"], "manual_action_required")
         self.assertEqual(transport.sent[-1]["result"]["manual_action"], "scan_wecom_admin_qr")
+
+    async def test_verbose_logger_reports_lifecycle_without_sensitive_payload(self):
+        events = []
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-sim-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-verbose",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": True,
+                    "payload": {
+                        "task_type": "wecom_bind_service",
+                        "enterprise_name": "zh_test_模拟客户",
+                        "plain_corp_id": "ww_secret_should_not_print",
+                    },
+                },
+            ]
+        )
+        runtime = C360WorkerRuntime(
+            config=self._config(),
+            transport=transport,
+            handlers=SimulatedTaskHandlers({}),
+            event_logger=events.append,
+        )
+
+        await runtime.run_until_idle()
+
+        joined = "\n".join(events)
+        self.assertIn("worker hello sent worker_id=win-sim-001 simulate=True", joined)
+        self.assertIn("worker accepted worker_id=win-sim-001", joined)
+        self.assertIn("task received task_id=task-verbose task_type=wecom_bind_service simulate=True", joined)
+        self.assertIn("task accepted task_id=task-verbose", joined)
+        self.assertIn("task progress task_id=task-verbose status=running", joined)
+        self.assertIn("task completed task_id=task-verbose status=succeeded", joined)
+        self.assertIn("worker idle", joined)
+        self.assertNotIn("zh_test_模拟客户", joined)
+        self.assertNotIn("ww_secret_should_not_print", joined)
+        self.assertNotIn("secret-token", joined)
+
+
+class C360WorkerCliTest(unittest.TestCase):
+    def test_verbose_flag_passes_event_logger_to_runner(self):
+        calls = []
+
+        async def fake_run(config, event_logger=None):
+            calls.append({"worker_id": config.worker_id, "event_logger": event_logger})
+
+        with patch.object(c360_worker, "_run", side_effect=fake_run):
+            exit_code = c360_worker.main(
+                ["--once", "--verbose"],
+                env={
+                    "C360_BASE_URL": "http://127.0.0.1:3601",
+                    "RPA_WORKER_TOKEN": "secret-token",
+                    "RPA_WORKER_ID": "win-sim-001",
+                },
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls[0]["worker_id"], "win-sim-001")
+        self.assertIsNotNone(calls[0]["event_logger"])
 
 
 class SimulatedTaskHandlersTest(unittest.IsolatedAsyncioTestCase):
