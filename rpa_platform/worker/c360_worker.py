@@ -36,14 +36,19 @@ async def _run(config, event_logger=None) -> None:
     if event_logger is not None:
         event_logger("worker connecting worker_id=%s ws_url=%s simulate=%s" % (config.worker_id, config.ws_url, config.simulate))
     transport = await connect_json_transport(config)
-    runtime = C360WorkerRuntime(
-        config=config,
-        transport=transport,
-        handlers=build_c360_task_handlers(config, diagnostics),
-        diagnostics=diagnostics,
-        event_logger=event_logger,
-    )
-    await runtime.run_until_idle()
+    try:
+        runtime = C360WorkerRuntime(
+            config=config,
+            transport=transport,
+            handlers=build_c360_task_handlers(config, diagnostics),
+            diagnostics=diagnostics,
+            event_logger=event_logger,
+        )
+        await runtime.run_until_idle()
+    finally:
+        close = getattr(transport, "close", None)
+        if close is not None:
+            await close()
 
 
 def _print_event(message: str) -> None:

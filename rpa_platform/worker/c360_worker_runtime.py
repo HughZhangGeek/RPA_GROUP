@@ -200,6 +200,8 @@ class AioHttpJsonTransport:
         data = getattr(message, "data", None)
         if not data:
             return None
+        if not isinstance(data, (str, bytes, bytearray)):
+            return None
         return json.loads(data)
 
     async def close(self) -> None:

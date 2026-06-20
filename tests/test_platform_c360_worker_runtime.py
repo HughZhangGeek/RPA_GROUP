@@ -274,6 +274,35 @@ class C360WorkerCliTest(unittest.TestCase):
         self.assertEqual(calls[0]["worker_id"], "win-sim-001")
         self.assertIsNotNone(calls[0]["event_logger"])
 
+    def test_runner_closes_transport_after_idle(self):
+        class ClosableTransport(FakeTransport):
+            def __init__(self):
+                super().__init__(incoming=[])
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        captured = {}
+
+        async def fake_connect(_config):
+            transport = ClosableTransport()
+            captured["transport"] = transport
+            return transport
+
+        with patch.object(c360_worker, "connect_json_transport", side_effect=fake_connect):
+            exit_code = c360_worker.main(
+                ["--once"],
+                env={
+                    "C360_BASE_URL": "http://127.0.0.1:3601",
+                    "RPA_WORKER_TOKEN": "secret-token",
+                    "RPA_WORKER_ID": "win-sim-001",
+                },
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(captured["transport"].closed)
+
 
 class SimulatedTaskHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_health_check_returns_simulated_ok(self):
@@ -329,6 +358,18 @@ class AioHttpJsonTransportTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn('"worker.hello"', websocket.sent[0])
         self.assertEqual(received["type"], "worker.accepted")
+
+    async def test_receive_json_returns_none_for_aiohttp_close_frame(self):
+        class Message:
+            data = 1000
+
+        class FakeWebSocket:
+            async def receive(self):
+                return Message()
+
+        transport = AioHttpJsonTransport(FakeWebSocket(), session=None)
+
+        self.assertIsNone(await transport.receive_json())
 
 
 if __name__ == "__main__":
