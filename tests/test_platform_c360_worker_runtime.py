@@ -160,7 +160,7 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.sent[-2]["type"], "task.progress")
         self.assertEqual(transport.sent[-2]["status"], "waiting_login")
         self.assertEqual(transport.sent[-1]["type"], "task.completed")
-        self.assertEqual(transport.sent[-1]["status"], "manual_action_required")
+        self.assertEqual(transport.sent[-1]["status"], "succeeded")
         self.assertEqual(transport.sent[-1]["result"]["manual_action"], "scan_wecom_admin_qr")
 
     async def test_non_simulate_wecom_handler_progress_is_sent_before_completed(self):
@@ -210,7 +210,40 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sent_after_hello[2]["status"], "readonly_preflight_started")
         self.assertEqual(sent_after_hello[3]["status"], "readonly_preflight_completed")
-        self.assertEqual(sent_after_hello[-1]["status"], "ready_for_real_bind")
+        self.assertEqual(sent_after_hello[-1]["status"], "succeeded")
+        self.assertEqual(sent_after_hello[-1]["result"]["status"], "ready_for_real_bind")
+
+    async def test_worker_task_result_blocked_is_reported_as_failed_with_domain_status_in_result(self):
+        class BlockedHandlers:
+            async def handle(self, dispatch):
+                return WorkerTaskResult(
+                    status="blocked",
+                    result={"status": "blocked", "reason": "missing_required_bind_context"},
+                    progress=[{"status": "blocked", "message": "wecom bind readonly preflight completed"}],
+                )
+
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-server-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-blocked",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": False,
+                    "payload": {"task_type": "wecom_bind_service"},
+                },
+            ]
+        )
+
+        runtime = C360WorkerRuntime(config=self._config(simulate=False), transport=transport, handlers=BlockedHandlers())
+
+        await runtime.run_until_idle()
+
+        self.assertEqual(transport.sent[-1]["type"], "task.completed")
+        self.assertEqual(transport.sent[-1]["status"], "failed")
+        self.assertEqual(transport.sent[-1]["result"]["status"], "blocked")
+        self.assertEqual(transport.sent[-1]["result"]["reason"], "missing_required_bind_context")
 
     async def test_verbose_logger_reports_lifecycle_without_sensitive_payload(self):
         events = []

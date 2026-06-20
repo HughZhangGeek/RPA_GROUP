@@ -103,7 +103,7 @@ class C360WorkerRuntime:
                 {
                     "type": "task.completed",
                     "task_id": task_id,
-                    "status": result.status,
+                    "status": _worker_completed_status(result.status),
                     "result": result.result,
                 }
             )
@@ -126,6 +126,10 @@ class C360WorkerRuntime:
 
 def _safe_text(value: Any) -> str:
     return _redact_string(str(value or ""))
+
+
+def _worker_completed_status(status: str) -> str:
+    return "failed" if status in {"failed", "blocked"} else "succeeded"
 
 
 class WebSocketsJsonTransport:
