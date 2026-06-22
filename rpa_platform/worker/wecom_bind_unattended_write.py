@@ -54,6 +54,23 @@ def run_unattended_wecom_bind_write(
 
     try:
         bind_input = build_bind_input_from_context(context)
+        if now is None:
+            now = datetime.now()
+        if _has_pending_auditorder_context(existing):
+            return _submit_existing_auditorder(
+                existing=existing,
+                context_file=context_file,
+                write_preflight={"status": "ok", "reason": "resume_existing_auditorder"},
+                preflight_metadata={"login_recovery": login_recovery} if login_recovery else {},
+                source_context=context,
+                service=JdyWecomBindService(
+                    jdy_client=jdy_client,
+                    wecom_client=wecom_client,
+                    secret_generator=secret_generator,
+                ),
+                wait_seconds=wait_seconds,
+            )
+
         preflight_runner = preflight_runner or run_readonly_preflight
         try:
             preflight = preflight_runner(bind_input, jdy_client=jdy_client, wecom_client=wecom_client)
@@ -71,23 +88,6 @@ def run_unattended_wecom_bind_write(
             preflight_metadata["login_recovery"] = login_recovery
         if write_preflight is None:
             return _blocked_preflight_result(preflight)
-
-        if now is None:
-            now = datetime.now()
-        if _has_pending_auditorder_context(existing):
-            return _submit_existing_auditorder(
-                existing=existing,
-                context_file=context_file,
-                write_preflight=write_preflight,
-                preflight_metadata=preflight_metadata,
-                source_context=context,
-                service=JdyWecomBindService(
-                    jdy_client=jdy_client,
-                    wecom_client=wecom_client,
-                    secret_generator=secret_generator,
-                ),
-                wait_seconds=wait_seconds,
-            )
 
         start_result = _start_bind_with_recoverable_context(
             bind_input=bind_input,

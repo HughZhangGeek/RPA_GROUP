@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
@@ -75,9 +76,14 @@ class RealWecomBindUnattendedWriteRecovery:
             run_unattended_wecom_bind_write,
         )
 
+        context_file = default_context_file(task_id)
+        has_pending_auditorder = _has_pending_auditorder_context_file(context_file)
         login_recovery = self._build_login_recovery(context)
         recoverable_preflight = dict(login_recovery.run(task_id=task_id, context=context))
-        if recoverable_preflight.get("status") not in {"ready_for_real_bind", "manual_confirm_required"}:
+        if (
+            recoverable_preflight.get("status") not in {"ready_for_real_bind", "manual_confirm_required"}
+            and not has_pending_auditorder
+        ):
             result = _coerce_business_unexecutable_result(dict(recoverable_preflight))
             result["mode"] = "unattended_write"
             return result
@@ -107,7 +113,7 @@ class RealWecomBindUnattendedWriteRecovery:
             secret_generator=RandomWecomSecretGenerator(),
             preflight_runner=lambda *_args, **_kwargs: recoverable_preflight,
             login_recovery=recoverable_preflight.get("login_recovery", {}),
-            context_file=default_context_file(task_id),
+            context_file=context_file,
             lock_file=default_lock_file(),
             wait_seconds=self.wait_seconds,
         )
@@ -141,6 +147,24 @@ def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
         wecom_suiteid=_parse_int(context.get("wecom_suiteid"), 1009479),
         suite_name=str(context.get("suite_name") or "简道云").strip(),
     )
+
+
+def _has_pending_auditorder_context_file(path: Path) -> bool:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    wecom = data.get("wecom") if isinstance(data.get("wecom"), dict) else {}
+    auditorderid = str(wecom.get("auditorderid") or "").strip()
+    if not auditorderid:
+        return False
+    try:
+        auditorder_status = int(wecom.get("auditorder_status"))
+    except (TypeError, ValueError):
+        auditorder_status = None
+    return auditorder_status != 5
 
 
 def build_wecom_bind_recovery_handler_from_env(

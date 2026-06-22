@@ -167,6 +167,70 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(result["preflight"]["status"], "ok")
         self.assertEqual(result["login_recovery"]["notify_attempts"], 1)
 
+    def test_unattended_write_recovery_continues_when_existing_auditorder_can_resume_after_preflight_blocked(self):
+        import json
+
+        from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindUnattendedWriteRecovery
+
+        events = []
+
+        class BusinessBlockedLoginRecovery:
+            def run(self, task_id, context):
+                events.append("login_recovery")
+                return {
+                    "status": "business_unexecutable",
+                    "reason": "jdy_corp_not_unique_or_missing",
+                    "detail": "no corp deploy row matched plain corp id or enterprise name",
+                }
+
+        def clients_builder(**_kwargs):
+            events.append("clients")
+            return {"jdy_client": object(), "wecom_client": object()}
+
+        def write_runner(**kwargs):
+            events.append("write")
+            self.assertEqual(kwargs["context_file"], context_file)
+            return {
+                "mode": "unattended_write",
+                "status": "success",
+                "reason": "resumed_existing_auditorder",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_file = Path(tmpdir) / "context.json"
+            lock_file = Path(tmpdir) / "write.lock"
+            context_file.write_text(
+                json.dumps({"wecom": {"auditorderid": "au-pending", "auditorder_status": 1}}),
+                encoding="utf-8",
+            )
+            with patch(
+                "rpa_platform.worker.wecom_bind_unattended_write.default_context_file",
+                return_value=context_file,
+            ), patch(
+                "rpa_platform.worker.wecom_bind_unattended_write.default_lock_file",
+                return_value=lock_file,
+            ):
+                recovery = RealWecomBindUnattendedWriteRecovery(
+                    env={},
+                    login_recovery_factory=lambda _context: BusinessBlockedLoginRecovery(),
+                    clients_builder=clients_builder,
+                    write_runner=write_runner,
+                    wait_seconds=0,
+                )
+
+                result = recovery.run(
+                    task_id="task-existing-pending-order",
+                    context={
+                        "enterprise_name": "zh_test_上海测试客户",
+                        "plain_corp_id": "ww_test_corp",
+                        "requested_user_id": "zh_test_user",
+                    },
+                )
+
+        self.assertEqual(events, ["login_recovery", "clients", "write"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason"], "resumed_existing_auditorder")
+
     def test_local_full_jdy_login_recovery_flow_continues_to_unattended_write(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindUnattendedWriteRecovery
         from rpa_platform.worker.wecom_login_recovery import (
