@@ -199,6 +199,7 @@ class PlaywrightQrArtifactProvider:
         self.node_work_dir.mkdir(parents=True, exist_ok=True)
         self.ensure_package(self.node_work_dir)
         output_path = self.artifact_dir / ("wecom-login-qr-%s.png" % int(self.now()))
+        cookie_output_path = self.node_work_dir / "last-wecom-cookie-export.json"
         script_path = _write_temp_node_script(self.node_work_dir, _node_qr_capture_script())
         self.script_path = script_path
         try:
@@ -213,6 +214,10 @@ class PlaywrightQrArtifactProvider:
                 self.qr_selector,
                 "--output-path",
                 str(output_path),
+                "--cookie-output-path",
+                str(cookie_output_path),
+                "--cookie-url",
+                self.login_url,
                 "--browser-channel",
                 self.browser_channel,
                 "--keepalive-seconds",
@@ -315,6 +320,9 @@ class PlaywrightWecomCookieExporter:
         self.node_work_dir.mkdir(parents=True, exist_ok=True)
         self.ensure_package(self.node_work_dir)
         output_path = self.node_work_dir / "last-wecom-cookie-export.json"
+        live_cookie_header = _read_cookie_export_result(output_path, allow_fresh_empty=True)
+        if live_cookie_header:
+            return live_cookie_header
         script_path = _write_temp_node_script(self.node_work_dir, _node_cookie_export_script())
         try:
             command = [
@@ -337,16 +345,27 @@ class PlaywrightWecomCookieExporter:
                 pass
         if getattr(completed, "returncode", 1) != 0:
             raise RuntimeError("WeCom cookie export failed with exit code %s" % getattr(completed, "returncode", "unknown"))
-        if not output_path.exists():
-            raise FileNotFoundError("WeCom cookie export did not produce a result file")
-        try:
-            payload = json.loads(output_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("WeCom cookie export result is not valid JSON") from exc
-        cookie_header = str(payload.get("wecom_cookie") or "").strip()
+        cookie_header = _read_cookie_export_result(output_path, allow_fresh_empty=False)
         if not cookie_header:
             raise RuntimeError("WeCom cookie export result is missing cookie header")
         return cookie_header
+
+
+def _read_cookie_export_result(output_path: Path, *, allow_fresh_empty: bool) -> str:
+    if not output_path.exists():
+        if allow_fresh_empty:
+            return ""
+        raise FileNotFoundError("WeCom cookie export did not produce a result file")
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("WeCom cookie export result is not valid JSON") from exc
+    cookie_header = str(payload.get("wecom_cookie") or "").strip()
+    if cookie_header:
+        return cookie_header
+    if allow_fresh_empty and time.time() - output_path.stat().st_mtime <= 300:
+        raise RuntimeError("WeCom cookie live export is waiting for a restored cookie header")
+    return ""
 
 
 class WecomCookieFileReadonlyProbe:
@@ -846,6 +865,7 @@ def _write_temp_node_script(node_work_dir: Path, script: str) -> Path:
 
 def _node_qr_capture_script() -> str:
     return r"""
+import fs from 'node:fs';
 import { chromium } from 'playwright';
 
 function argValue(name) {
@@ -856,10 +876,20 @@ function argValue(name) {
   return process.argv[index + 1];
 }
 
+function optionalArgValue(name) {
+  const index = process.argv.indexOf(name);
+  if (index === -1 || index + 1 >= process.argv.length) {
+    return '';
+  }
+  return process.argv[index + 1];
+}
+
 const profileDir = argValue('--profile-dir');
 const loginUrl = argValue('--login-url');
 const qrSelector = argValue('--qr-selector');
 const outputPath = argValue('--output-path');
+const cookieOutputPath = optionalArgValue('--cookie-output-path');
+const cookieUrl = optionalArgValue('--cookie-url') || loginUrl;
 const browserChannel = argValue('--browser-channel');
 const keepaliveSeconds = Number(argValue('--keepalive-seconds') || '0');
 
@@ -935,16 +965,41 @@ async function initialPage(context) {
   return await context['newPage']();
 }
 
+function cookieHeader(cookies) {
+  return cookies
+    .filter((cookie) => cookie.name && cookie.value)
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join('; ');
+}
+
+async function writeCookieExport(context) {
+  if (!cookieOutputPath) {
+    return;
+  }
+  const cookies = await context.cookies([cookieUrl]);
+  const payload = {
+    wecom_cookie: cookieHeader(cookies),
+    wecom_cookie_count: cookies.length,
+  };
+  fs.writeFileSync(cookieOutputPath, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
+}
+
 const context = await chromium.launchPersistentContext(profileDir, launchOptions);
 try {
   const page = await initialPage(context);
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
   const locator = await findQrLocator(page, qrSelector);
   await locator.screenshot({ path: outputPath });
+  await writeCookieExport(context);
   if (keepaliveSeconds > 0) {
-    await new Promise((resolve) => setTimeout(resolve, keepaliveSeconds * 1000));
+    const deadline = Date.now() + keepaliveSeconds * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await writeCookieExport(context);
+    }
   }
 } finally {
+  await writeCookieExport(context);
   await context.close();
 }
 """

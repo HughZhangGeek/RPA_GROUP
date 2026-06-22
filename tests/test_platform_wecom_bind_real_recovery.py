@@ -1,5 +1,7 @@
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class FakeOrchestrator:
@@ -282,6 +284,153 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
 
         self.assertEqual(orchestrator.notifier.title, "简道眼登录")
         self.assertIn("简道眼登录态失效", orchestrator.notifier.status_text)
+
+    def test_env_built_jdy_login_recovery_refreshes_cookie_and_continues_unattended_write(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import (
+            RealWecomBindUnattendedWriteRecovery,
+            _build_jdy_orchestrator,
+            _jdy_login_recovery_config_from_env,
+        )
+
+        events = []
+
+        class FakeQrProvider:
+            def __init__(self, **_kwargs):
+                self.qr_path = qr_path
+
+            def capture(self):
+                events.append("qr_captured")
+                return self.qr_path
+
+            def close(self):
+                events.append("qr_closed")
+
+        class FakeCookieExporter:
+            def __init__(self, *, wecom_url, **_kwargs):
+                events.append("cookie_exporter:%s" % wecom_url)
+
+            def __call__(self):
+                events.append("cookie_exported")
+                return "jdy-cookie-after-scan"
+
+        class FakeBotClient:
+            def __init__(self, webhook_url):
+                self.webhook_url = webhook_url
+
+            def send(self, payload):
+                events.append("qr_notified:%s" % payload["msgtype"])
+                self.last_payload = payload
+                return {"errcode": 0}
+
+        class FakeJdyProbe:
+            def __init__(self, *, cookie_file, **_kwargs):
+                self.cookie_file = Path(cookie_file)
+
+            def __call__(self):
+                events.append("health_cookie:%s" % self.cookie_file.read_text(encoding="utf-8"))
+                return {"corp_deploy_list": []}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            qr_path = root / "jdy-qr.png"
+            qr_path.write_bytes(b"qr")
+            jdy_cookie_file = root / "jdy-admin.cookie"
+            wecom_cookie_file = root / "wecom-admin.cookie"
+            wecom_cookie_file.write_text("wecom-cookie", encoding="utf-8")
+            env = {
+                "JDY_LOGIN_RECOVERY_ENABLED": "true",
+                "JDY_QR_NOTIFY_ENABLED": "true",
+                "JDY_QR_NOTIFY_WEBHOOK_URL": "https://example.invalid/webhook",
+                "JDY_QR_NOTIFY_MODE": "markdown",
+                "JDY_QR_TTL_SECONDS": "3",
+                "JDY_QR_POLL_INTERVAL_SECONDS": "1",
+                "JDY_QR_MAX_NOTIFY_TIMES": "1",
+                "JDY_ADMIN_COOKIE_FILE": str(jdy_cookie_file),
+                "JDY_BROWSER_PROFILE_DIR": str(root / "jdy-profile"),
+                "JDY_LOGIN_RECOVERY_NODE_WORK_DIR": str(root / "jdy-node"),
+                "JDY_QR_ARTIFACT_DIR": str(root / "jdy-qr"),
+                "JDY_LOGIN_URL": "https://dc.jdydevelop.com/sa?redirect_uri=%2F",
+                "WECOM_ADMIN_COOKIE_FILE": str(wecom_cookie_file),
+            }
+            preflight_results = [
+                {"status": "blocked", "reason": "jdy_session_expired", "detail": "用户尚未登录"},
+                {"status": "ok", "reason": "ready_for_confirm_write"},
+            ]
+
+            def fake_build_real_clients(*, jdy_cookie_file, wecom_cookie_file):
+                events.append("clients_for_preflight:%s|%s" % (Path(jdy_cookie_file).name, Path(wecom_cookie_file).name))
+                return {"jdy_client": object(), "wecom_client": object()}
+
+            def fake_run_readonly_preflight(_bind_input, **_clients):
+                result = preflight_results.pop(0)
+                events.append("preflight:%s" % result["reason"])
+                return result
+
+            def clients_builder(**kwargs):
+                events.append("clients_built:%s|%s" % (Path(kwargs["jdy_cookie_file"]).name, Path(kwargs["wecom_cookie_file"]).name))
+                return {"jdy_client": object(), "wecom_client": object()}
+
+            def write_runner(**kwargs):
+                events.append("real_write_started")
+                preflight = kwargs["preflight_runner"]()
+                return {
+                    "mode": "unattended_write",
+                    "status": "success",
+                    "preflight": preflight["preflight"],
+                    "login_recovery": kwargs["login_recovery"],
+                }
+
+            with patch("rpa_platform.worker.wecom_bind_real_recovery.PlaywrightQrArtifactProvider", FakeQrProvider):
+                with patch("rpa_platform.worker.wecom_bind_real_recovery.PlaywrightWecomCookieExporter", FakeCookieExporter):
+                    with patch("rpa_platform.worker.wecom_bind_real_recovery.WecomBotClient", FakeBotClient):
+                        with patch("rpa_platform.worker.wecom_bind_real_recovery.JdyCookieFileReadonlyProbe", FakeJdyProbe):
+                            with patch(
+                                "rpa_platform.worker.wecom_bind_real_recovery.build_real_clients",
+                                side_effect=fake_build_real_clients,
+                            ):
+                                with patch(
+                                    "rpa_platform.worker.wecom_bind_real_recovery.run_readonly_preflight",
+                                    side_effect=fake_run_readonly_preflight,
+                                ):
+                                    config = _jdy_login_recovery_config_from_env(env)
+                                    recovery = RealWecomBindUnattendedWriteRecovery(
+                                        env=env,
+                                        login_recovery_factory=lambda context: _build_jdy_orchestrator(config, env, context),
+                                        clients_builder=clients_builder,
+                                        write_runner=write_runner,
+                                        wait_seconds=0,
+                                    )
+                                    result = recovery.run(
+                                        task_id="task-jdy-env-built",
+                                        context={
+                                            "enterprise_name": "zh_test_上海测试客户",
+                                            "enterprise_short_name": "zh_test_上海",
+                                            "plain_corp_id": "ww_test_corp",
+                                            "requested_user_id": "zh_test_user",
+                                        },
+                                    )
+                                    refreshed_cookie = jdy_cookie_file.read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["preflight"]["status"], "ok")
+        self.assertEqual(refreshed_cookie, "jdy-cookie-after-scan")
+        self.assertEqual(
+            events,
+            [
+                "cookie_exporter:https://dc.jdydevelop.com/sa?redirect_uri=%2F",
+                "clients_for_preflight:jdy-admin.cookie|wecom-admin.cookie",
+                "preflight:jdy_session_expired",
+                "qr_captured",
+                "qr_notified:markdown",
+                "cookie_exported",
+                "health_cookie:jdy-cookie-after-scan",
+                "clients_for_preflight:jdy-admin.cookie|wecom-admin.cookie",
+                "preflight:ready_for_confirm_write",
+                "qr_closed",
+                "clients_built:jdy-admin.cookie|wecom-admin.cookie",
+                "real_write_started",
+            ],
+        )
 
 
 if __name__ == "__main__":

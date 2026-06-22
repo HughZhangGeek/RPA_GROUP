@@ -399,6 +399,26 @@ class WecomLoginRecoveryOrchestratorTest(unittest.TestCase):
 
             self.assertEqual(expired.status, LoginSessionStatus.EXPIRED)
 
+    def test_jdy_cookie_file_probe_reads_refreshed_cookie_file_each_time(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cookie_file = Path(tmpdir) / "jdy.cookie"
+            cookie_file.write_text("old-jdy-cookie", encoding="utf-8")
+            seen_cookies = []
+
+            def fake_request(_path, _payload, headers):
+                seen_cookies.append(headers["cookie"])
+                return {"corp_deploy_list": []}
+
+            probe = JdyCookieFileReadonlyProbe(cookie_file, filter_text="ww001", request_json=fake_request)
+
+            first = LoginSessionHealthChecker(probe).check()
+            cookie_file.write_text("new-jdy-cookie", encoding="utf-8")
+            second = LoginSessionHealthChecker(probe).check()
+
+            self.assertEqual(first.status, LoginSessionStatus.RESTORED)
+            self.assertEqual(second.status, LoginSessionStatus.RESTORED)
+            self.assertEqual(seen_cookies, ["old-jdy-cookie", "new-jdy-cookie"])
+
 
 class LoginRecoveryConfigTest(unittest.TestCase):
     def test_loads_qr_notification_settings_from_env(self):
@@ -601,6 +621,8 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
             self.assertEqual(command[0], "node")
             self.assertIn("--profile-dir", command)
             self.assertIn("--output-path", command)
+            self.assertIn("--cookie-output-path", command)
+            self.assertIn("--cookie-url", command)
             self.assertIn("--qr-selector", command)
             self.assertNotIn("corp-id-placeholder", " ".join(command))
 
@@ -741,6 +763,16 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
         self.assertIn("pages[0]", script)
         self.assertNotIn("context.newPage()", script)
 
+    def test_qr_capture_script_exports_cookies_while_login_page_is_alive(self):
+        from rpa_platform.worker.wecom_login_recovery import _node_qr_capture_script
+
+        script = _node_qr_capture_script()
+
+        self.assertIn("--cookie-output-path", script)
+        self.assertIn("writeCookieExport(context)", script)
+        self.assertIn("context.cookies([cookieUrl])", script)
+        self.assertIn("while (Date.now() < deadline)", script)
+
 
 class WecomCookieSessionTest(unittest.TestCase):
     def test_playwright_cookie_exporter_reads_cookie_from_persistent_profile(self):
@@ -801,6 +833,29 @@ class WecomCookieSessionTest(unittest.TestCase):
         self.assertTrue(Path(command[command.index("--profile-dir") + 1]).is_absolute())
         self.assertTrue(Path(command[command.index("--output-path") + 1]).is_absolute())
         self.assertTrue(Path(commands[0]["cwd"]).is_absolute())
+
+    def test_cookie_exporter_uses_live_qr_capture_export_without_launching_new_chrome(self):
+        def fail_run(_command, _cwd):
+            raise AssertionError("live cookie export should avoid launching a second Chrome")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            node_dir = root / "node"
+            node_dir.mkdir()
+            (node_dir / "last-wecom-cookie-export.json").write_text(
+                '{"wecom_cookie": "header-value-from-live-qr"}',
+                encoding="utf-8",
+            )
+            exporter = PlaywrightWecomCookieExporter(
+                profile_dir=root / "profile",
+                node_work_dir=node_dir,
+                ensure_package=lambda node_work_dir: None,
+                run_command=fail_run,
+            )
+
+            cookie_header = exporter()
+
+        self.assertEqual(cookie_header, "header-value-from-live-qr")
 
     def test_session_refresher_writes_latest_cookie_with_owner_only_permissions(self):
         with tempfile.TemporaryDirectory() as tmpdir:
