@@ -568,6 +568,15 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
         self.assertIn("[class*='qrcode' i]", DEFAULT_QR_SELECTOR)
         self.assertIn("[class*='qr' i]", DEFAULT_QR_SELECTOR)
 
+    def test_background_wait_timeout_covers_node_locator_deadline(self):
+        provider = PlaywrightQrArtifactProvider(
+            profile_dir=Path("profile"),
+            artifact_dir=Path("qr"),
+            node_work_dir=Path("node"),
+        )
+
+        self.assertGreaterEqual(provider.wait_timeout_seconds, 45)
+
     def test_captures_qr_to_local_artifact_with_persistent_profile(self):
         commands = []
 

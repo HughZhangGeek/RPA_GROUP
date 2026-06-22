@@ -173,7 +173,7 @@ class PlaywrightQrArtifactProvider:
         run_command: Optional[Callable[[List[str], str], Any]] = None,
         start_process: Optional[Callable[[List[str], str], Any]] = None,
         keepalive_seconds: int = 120,
-        wait_timeout_seconds: int = 30,
+        wait_timeout_seconds: int = 60,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], float] = time.time,
     ):
