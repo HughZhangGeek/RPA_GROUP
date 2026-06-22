@@ -20,6 +20,19 @@ from rpa_platform.worker.wecom_login_recovery import (
 from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError, build_real_clients, run_readonly_preflight
 
 
+BUSINESS_UNEXECUTABLE_REASONS = {
+    "missing_enterprise_name",
+    "missing_corp_id",
+    "missing_userid",
+    "missing_required_bind_context",
+    "jdy_corp_not_unique_or_missing",
+    "owner_cannot_bind_or_update_corp_secret",
+    "wecom_app_not_unique_or_missing",
+    "wecom_app_id_missing",
+    "wecom_aes_app_id_missing",
+}
+
+
 class RealWecomBindRecovery:
     def __init__(self, orchestrator_factory: Callable[[Dict[str, Any]], Any]):
         self.orchestrator_factory = orchestrator_factory
@@ -27,14 +40,10 @@ class RealWecomBindRecovery:
     def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         missing = _missing_required_fields(context)
         if missing:
-            return {
-                "status": "blocked",
-                "reason": "missing_required_bind_context",
-                "missing_fields": missing,
-            }
+            return _missing_required_business_result(missing)
         build_bind_input_from_context(context)
         orchestrator = self.orchestrator_factory(context)
-        return dict(orchestrator.run(task_id=task_id, context=context))
+        return _coerce_business_unexecutable_result(dict(orchestrator.run(task_id=task_id, context=context)))
 
 
 class RealWecomBindUnattendedWriteRecovery:
@@ -55,12 +64,7 @@ class RealWecomBindUnattendedWriteRecovery:
     def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         missing = _missing_required_fields(context)
         if missing:
-            return {
-                "mode": "unattended_write",
-                "status": "blocked",
-                "reason": "missing_required_bind_context",
-                "missing_fields": missing,
-            }
+            return _missing_required_business_result(missing, mode="unattended_write")
 
         from rpa_platform.worker.wecom_bind_unattended_write import (
             default_context_file,
@@ -71,7 +75,7 @@ class RealWecomBindUnattendedWriteRecovery:
         login_recovery = self._build_login_recovery(context)
         recoverable_preflight = dict(login_recovery.run(task_id=task_id, context=context))
         if recoverable_preflight.get("status") not in {"ready_for_real_bind", "manual_confirm_required"}:
-            result = dict(recoverable_preflight)
+            result = _coerce_business_unexecutable_result(dict(recoverable_preflight))
             result["mode"] = "unattended_write"
             return result
 
@@ -125,10 +129,10 @@ class ChainedLoginRecoveryOrchestrator:
 
 def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
     return JdyWecomBindInput(
-        enterprise_name=str(context.get("enterprise_name") or context.get("企业客户名称") or "").strip(),
-        enterprise_short_name=str(context.get("enterprise_short_name") or context.get("企业简称") or "").strip(),
-        plain_corp_id=str(context.get("plain_corp_id") or context.get("corp_id") or "").strip(),
-        requested_user_id=str(context.get("requested_user_id") or context.get("user_id") or "").strip(),
+        enterprise_name=_first_text(context, "enterprise_name", "企业客户名称"),
+        enterprise_short_name=_first_text(context, "enterprise_short_name", "企业简称"),
+        plain_corp_id=_first_text(context, "plain_corp_id", "corp_id", "企业微信明文 CorpID"),
+        requested_user_id=_first_text(context, "requested_user_id", "userid", "user_id", "User_ID"),
         suite_id=_parse_int(context.get("suite_id"), 1),
         suite_scenario=str(context.get("suite_scenario") or "main").strip(),
         wecom_suiteid=_parse_int(context.get("wecom_suiteid"), 1009479),
@@ -325,10 +329,42 @@ def _missing_required_fields(context: Dict[str, Any]) -> list[str]:
     if not bind_input.enterprise_name:
         missing.append("enterprise_name")
     if not bind_input.plain_corp_id:
-        missing.append("plain_corp_id")
+        missing.append("corp_id")
     if not bind_input.requested_user_id:
-        missing.append("requested_user_id")
+        missing.append("userid")
     return missing
+
+
+def _missing_required_business_result(missing: list[str], mode: Optional[str] = None) -> Dict[str, Any]:
+    reason_by_field = {
+        "enterprise_name": "missing_enterprise_name",
+        "corp_id": "missing_corp_id",
+        "userid": "missing_userid",
+    }
+    result = {
+        "status": "business_unexecutable",
+        "reason": reason_by_field.get(missing[0], "missing_required_bind_context")
+        if len(missing) == 1
+        else "missing_required_bind_context",
+        "missing_fields": list(missing),
+    }
+    if mode:
+        result["mode"] = mode
+    return result
+
+
+def _coerce_business_unexecutable_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    if result.get("status") == "blocked" and result.get("reason") in BUSINESS_UNEXECUTABLE_REASONS:
+        result["status"] = "business_unexecutable"
+    return result
+
+
+def _first_text(context: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = context.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
 
 
 def _parse_int(raw: Any, default: int) -> int:

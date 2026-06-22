@@ -10,9 +10,15 @@ from rpa_platform.domain.redaction import redact_context
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient
 from rpa_platform.services.wecom_bind_service import JdyWecomBindService, WecomSecretGenerator
-from rpa_platform.worker.wecom_bind_real_recovery import build_bind_input_from_context
+from rpa_platform.worker.wecom_bind_real_recovery import (
+    BUSINESS_UNEXECUTABLE_REASONS,
+    build_bind_input_from_context,
+)
 from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError, run_readonly_preflight
 from scripts.dev.run_wecom_bind_real_write import _start_bind_with_recoverable_context
+
+
+PRIVATE_WEWORK_BIND_ENTRY_ID = "5e4ba3a09c38890006fbdf71"
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -35,7 +41,7 @@ def run_unattended_wecom_bind_write(
 
     existing = _load_json(context_file)
     if _is_success_context(existing):
-        return _already_completed_result(existing, context_file)
+        return _already_completed_result(existing, context_file, source_context=context)
 
     if not _acquire_lock(lock_file, task_id):
         return {
@@ -84,7 +90,14 @@ def run_unattended_wecom_bind_write(
         submit_result = service.submit_online_order(start_result.context)
         start_result.context["wecom"]["auditorder_status"] = submit_result.context["wecom"]["auditorder_status"]
         _write_private_json(context_file, start_result.context)
-        return _success_result(write_preflight, context_file, start_result, submit_result, preflight_metadata)
+        return _success_result(
+            write_preflight,
+            context_file,
+            start_result,
+            submit_result,
+            preflight_metadata,
+            source_context=context,
+        )
     except Exception as exc:
         return {
             "mode": "unattended_write",
@@ -111,6 +124,7 @@ def _success_result(
     start_result: Any,
     submit_result: Any,
     preflight_metadata: Optional[Dict[str, Any]] = None,
+    source_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     result = {
         "mode": "unattended_write",
@@ -133,6 +147,7 @@ def _success_result(
             "context": redact_context(submit_result.context),
         },
     }
+    result.update(_jdy_writeback_fields(start_result.context, source_context or {}))
     for key, value in (preflight_metadata or {}).items():
         result[key] = redact_context(value)
     return result
@@ -152,6 +167,14 @@ def _preflight_for_write(preflight: Dict[str, Any]) -> tuple[Optional[Dict[str, 
 
 def _blocked_preflight_result(preflight: Dict[str, Any]) -> Dict[str, Any]:
     status = str(preflight.get("status") or "blocked")
+    preflight_reason = str(preflight.get("reason") or "")
+    if status == "blocked" and preflight_reason in BUSINESS_UNEXECUTABLE_REASONS:
+        return {
+            "mode": "unattended_write",
+            "status": "business_unexecutable",
+            "reason": preflight_reason,
+            "preflight": redact_context(preflight),
+        }
     result = {
         "mode": "unattended_write",
         "status": status if status in {"waiting_login", "login_recovery_notify_exhausted"} else "blocked",
@@ -174,9 +197,13 @@ def _blocked_preflight_result(preflight: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _already_completed_result(existing: Dict[str, Any], context_file: Path) -> Dict[str, Any]:
+def _already_completed_result(
+    existing: Dict[str, Any],
+    context_file: Path,
+    source_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     wecom = existing.get("wecom") if isinstance(existing.get("wecom"), dict) else {}
-    return {
+    result = {
         "mode": "unattended_write",
         "status": "already_completed",
         "reason": "context_already_has_successful_auditorder",
@@ -187,6 +214,30 @@ def _already_completed_result(existing: Dict[str, Any], context_file: Path) -> D
         },
         "context": redact_context(existing),
     }
+    result.update(_jdy_writeback_fields(existing, source_context or {}))
+    return result
+
+
+def _jdy_writeback_fields(context: Dict[str, Any], source_context: Dict[str, Any]) -> Dict[str, str]:
+    jdy = context.get("jdy") if isinstance(context.get("jdy"), dict) else {}
+    wecom = context.get("wecom") if isinstance(context.get("wecom"), dict) else {}
+    result = {
+        "secret_corp_id": str(jdy.get("corp_secret_id") or ""),
+        "home_url": str(wecom.get("homeurl") or ""),
+        "webhook_url": str(wecom.get("callbackurl") or ""),
+    }
+    if _source_entry_id(source_context) == PRIVATE_WEWORK_BIND_ENTRY_ID:
+        result["wx_token"] = str(wecom.get("token") or "")
+        result["wx_key"] = str(wecom.get("encoding_aes_key") or "")
+    return result
+
+
+def _source_entry_id(context: Dict[str, Any]) -> str:
+    for key in ("source_entry_id", "source_form_id", "entry_id", "form_id"):
+        value = context.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
 
 
 def _is_success_context(value: Dict[str, Any]) -> bool:

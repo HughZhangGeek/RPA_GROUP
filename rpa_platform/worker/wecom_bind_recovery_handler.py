@@ -149,6 +149,15 @@ def _unattended_write_task_result(
         )
         return WorkerTaskResult(status="blocked", result=safe_result, progress=progress)
 
+    if status == "business_unexecutable":
+        progress.append(
+            {
+                "status": "readonly_preflight_completed",
+                "message": "wecom bind readonly preflight completed",
+            }
+        )
+        return WorkerTaskResult(status="business_unexecutable", result=safe_result, progress=progress)
+
     progress.append(
         {
             "status": "readonly_preflight_completed",

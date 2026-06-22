@@ -245,6 +245,42 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.sent[-1]["result"]["status"], "blocked")
         self.assertEqual(transport.sent[-1]["result"]["reason"], "missing_required_bind_context")
 
+    async def test_business_unexecutable_stays_structured_in_result_with_succeeded_wire_status(self):
+        class BusinessUnexecutableHandlers:
+            async def handle(self, dispatch):
+                return WorkerTaskResult(
+                    status="business_unexecutable",
+                    result={"status": "business_unexecutable", "reason": "missing_corp_id"},
+                    progress=[{"status": "business_unexecutable", "message": "wecom bind cannot execute"}],
+                )
+
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-server-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-business-unexecutable",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": False,
+                    "payload": {"task_type": "wecom_bind_service", "enterprise_name": "zh_test_上海测试客户"},
+                },
+            ]
+        )
+
+        runtime = C360WorkerRuntime(
+            config=self._config(simulate=False),
+            transport=transport,
+            handlers=BusinessUnexecutableHandlers(),
+        )
+
+        await runtime.run_until_idle()
+
+        self.assertEqual(transport.sent[-1]["type"], "task.completed")
+        self.assertEqual(transport.sent[-1]["status"], "succeeded")
+        self.assertEqual(transport.sent[-1]["result"]["status"], "business_unexecutable")
+        self.assertEqual(transport.sent[-1]["result"]["reason"], "missing_corp_id")
+
     async def test_verbose_logger_reports_lifecycle_without_sensitive_payload(self):
         events = []
         transport = FakeTransport(

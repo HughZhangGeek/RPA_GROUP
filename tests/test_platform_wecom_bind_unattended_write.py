@@ -11,6 +11,9 @@ from scripts.dev.run_platform_dryrun import FakeServiceJdyAdminTransport, FakeSe
 
 
 class WecomBindUnattendedWriteTest(unittest.TestCase):
+    PRIVATE_FORM_ID = "5e4ba3a09c38890006fbdf71"
+    PUBLIC_FORM_ID = "6258e5f6e09e970007b0150c"
+
     def _context(self):
         return {
             "enterprise_name": "上海测试客户",
@@ -61,6 +64,72 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
         self.assertNotIn("token-secret", json.dumps(result, ensure_ascii=False))
         self.assertNotIn("aes-secret", json.dumps(result, ensure_ascii=False))
 
+    def test_private_form_success_result_contains_jdy_writeback_fields(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        context = dict(self._context())
+        context.update(
+            {
+                "source_entry_id": self.PRIVATE_FORM_ID,
+                "current_home_url": "//dashboard",
+                "current_webhook_url": "//corp/service",
+            }
+        )
+        jdy_client, wecom_client, _jdy_transport, _wecom_transport = self._clients()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_unattended_wecom_bind_write(
+                task_id="task-private-writeback",
+                context=context,
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                context_file=Path(tmpdir) / "context.json",
+                lock_file=Path(tmpdir) / "write.lock",
+                now=datetime(2026, 6, 20, 12, 0, 0),
+                wait_seconds=0,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["secret_corp_id"], "corp-secret")
+        self.assertEqual(result["home_url"], "https://wxwork.jiandaoyun.com/wxwork/corp-secret/dashboard")
+        self.assertEqual(result["webhook_url"], "https://wxwork.jiandaoyun.com/wxwork/corp/corp-secret/service")
+        self.assertEqual(result["wx_token"], "token-secret")
+        self.assertEqual(result["wx_key"], "aes-secret")
+
+    def test_public_form_success_result_omits_secret_token_fields_and_uses_generated_urls(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        context = dict(self._context())
+        context.update(
+            {
+                "source_entry_id": self.PUBLIC_FORM_ID,
+                "home_url": "//dashboard",
+                "webhook_url": "//corp/service",
+                "current_home_url": "//dashboard",
+                "current_webhook_url": "//corp/service",
+            }
+        )
+        jdy_client, wecom_client, _jdy_transport, _wecom_transport = self._clients()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_unattended_wecom_bind_write(
+                task_id="task-public-writeback",
+                context=context,
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                context_file=Path(tmpdir) / "context.json",
+                lock_file=Path(tmpdir) / "write.lock",
+                now=datetime(2026, 6, 20, 12, 0, 0),
+                wait_seconds=0,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["secret_corp_id"], "corp-secret")
+        self.assertEqual(result["home_url"], "https://wxwork.jiandaoyun.com/wxwork/corp-secret/dashboard")
+        self.assertEqual(result["webhook_url"], "https://wxwork.jiandaoyun.com/wxwork/corp/corp-secret/service")
+        self.assertNotIn("wx_token", result)
+        self.assertNotIn("wx_key", result)
+
     def test_preflight_failed_does_not_write(self):
         from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
 
@@ -89,9 +158,9 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
                 wait_seconds=0,
             )
 
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "business_unexecutable")
         self.assertEqual(result["mode"], "unattended_write")
-        self.assertEqual(result["reason"], "preflight_not_ok")
+        self.assertEqual(result["reason"], "jdy_corp_not_unique_or_missing")
         self.assertNotIn("/wwopen/developer/order/add", [call["path"] for call in wecom_transport.calls])
 
     def test_recovered_login_preflight_continues_to_real_write(self):

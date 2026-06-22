@@ -292,6 +292,37 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.result["queue_control"]["action"], "pause")
         self.assertNotIn("real_write_started", str(result.progress))
 
+    async def test_unattended_write_business_unexecutable_does_not_report_real_write_failure(self):
+        recovery = FakeRecovery(
+            {
+                "mode": "unattended_write",
+                "status": "business_unexecutable",
+                "reason": "jdy_corp_not_unique_or_missing",
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-unattended-business-unexecutable",
+                "task_type": "wecom_bind_service",
+                "payload": {"enterprise_name": "上海测试客户"},
+            }
+        )
+
+        self.assertEqual(result.status, "business_unexecutable")
+        self.assertEqual(
+            [item["status"] for item in result.progress],
+            [
+                "readonly_preflight_started",
+                "readonly_preflight_completed",
+            ],
+        )
+        self.assertEqual(result.result["status"], "business_unexecutable")
+        self.assertEqual(result.result["reason"], "jdy_corp_not_unique_or_missing")
+        self.assertNotIn("real_write_started", str(result.progress))
+        self.assertNotIn("real_write_failed", str(result.progress))
+
 
 if __name__ == "__main__":
     unittest.main()

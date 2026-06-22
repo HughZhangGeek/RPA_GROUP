@@ -36,16 +36,66 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(bind_input.requested_user_id, "zh_test_user")
         self.assertEqual(bind_input.wecom_suiteid, 1009479)
 
-    def test_missing_required_context_returns_blocked_without_write(self):
+    def test_build_bind_input_from_csm_semantic_payload(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import build_bind_input_from_context
+
+        bind_input = build_bind_input_from_context(
+            {
+                "enterprise_name": "zh_test_上海测试客户",
+                "enterprise_short_name": "上海测试",
+                "corp_id": "ww_semantic_corp",
+                "userid": "zh_test_userid",
+                "source_entry_id": "6258e5f6e09e970007b0150c",
+                "current_home_url": "//dashboard",
+                "current_webhook_url": "//corp/service",
+            }
+        )
+
+        self.assertEqual(bind_input.enterprise_name, "zh_test_上海测试客户")
+        self.assertEqual(bind_input.enterprise_short_name, "上海测试")
+        self.assertEqual(bind_input.plain_corp_id, "ww_semantic_corp")
+        self.assertEqual(bind_input.requested_user_id, "zh_test_userid")
+
+    def test_missing_required_context_returns_business_unexecutable_without_write(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
 
-        recovery = RealWecomBindRecovery(orchestrator_factory=lambda _context: FakeOrchestrator())
+        orchestrator = FakeOrchestrator()
+        recovery = RealWecomBindRecovery(orchestrator_factory=lambda _context: orchestrator)
 
-        result = recovery.run(task_id="task-missing", context={"enterprise_name": "zh_test_上海测试客户"})
+        result = recovery.run(
+            task_id="task-missing",
+            context={"enterprise_name": "zh_test_上海测试客户", "userid": "zh_test_userid"},
+        )
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["reason"], "missing_required_bind_context")
-        self.assertIn("plain_corp_id", result["missing_fields"])
+        self.assertEqual(result["status"], "business_unexecutable")
+        self.assertEqual(result["reason"], "missing_corp_id")
+        self.assertIn("corp_id", result["missing_fields"])
+        self.assertEqual(orchestrator.calls, [])
+
+    def test_business_preflight_blocked_result_becomes_business_unexecutable(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
+
+        class BusinessBlockedOrchestrator:
+            def run(self, task_id, context):
+                return {
+                    "status": "blocked",
+                    "reason": "wecom_app_not_unique_or_missing",
+                    "detail": "no custom app matched authcorp name and app name",
+                }
+
+        recovery = RealWecomBindRecovery(orchestrator_factory=lambda _context: BusinessBlockedOrchestrator())
+
+        result = recovery.run(
+            task_id="task-business-blocked",
+            context={
+                "enterprise_name": "zh_test_上海测试客户",
+                "corp_id": "ww_test_corp",
+                "userid": "zh_test_user",
+            },
+        )
+
+        self.assertEqual(result["status"], "business_unexecutable")
+        self.assertEqual(result["reason"], "wecom_app_not_unique_or_missing")
 
     def test_run_delegates_to_login_recovery_orchestrator(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
