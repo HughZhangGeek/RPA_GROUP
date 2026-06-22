@@ -360,6 +360,60 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
         self.assertEqual(jdy_transport.calls, [])
         self.assertNotIn("token-secret", json.dumps(result, ensure_ascii=False))
 
+    def test_existing_pending_auditorder_context_resumes_submit_without_duplicate_start_write(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        jdy_client, wecom_client, jdy_transport, wecom_transport = self._clients()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_file = Path(tmpdir) / "context.json"
+            context_file.write_text(
+                json.dumps(
+                    {
+                        "jdy": {
+                            "corp_secret_id": "corp-secret",
+                            "corp_name": "上海测试客户",
+                        },
+                        "wecom": {
+                            "auditorderid": "au-pending",
+                            "auditorder_status": 1,
+                            "homeurl": "https://wxwork.jiandaoyun.com/wxwork/corp-secret/dashboard",
+                            "callbackurl": "https://wxwork.jiandaoyun.com/wxwork/corp/corp-secret/service",
+                            "token": "token-secret",
+                            "encoding_aes_key": "aes-secret",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_unattended_wecom_bind_write(
+                task_id="task-pending-before",
+                context=self._context(),
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                preflight_runner=lambda *_args, **_kwargs: {"status": "ok", "reason": "ready_for_confirm_write"},
+                context_file=context_file,
+                lock_file=Path(tmpdir) / "write.lock",
+                now=datetime(2026, 6, 20, 12, 0, 0),
+                wait_seconds=0,
+            )
+
+            saved = json.loads(context_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason"], "resumed_existing_auditorder")
+        self.assertEqual(result["wecom"]["auditorderid"], "au-pending")
+        self.assertEqual(result["wecom"]["auditorder_status"], 5)
+        self.assertEqual(saved["wecom"]["auditorderid"], "au-pending")
+        self.assertEqual(saved["wecom"]["auditorder_status"], 5)
+        self.assertEqual(jdy_transport.calls, [])
+        paths = [call["path"] for call in wecom_transport.calls]
+        self.assertIn("/wwopen/developer/order/set", paths)
+        self.assertNotIn("/wwopen/developer/order/add", paths)
+        self.assertNotIn("/api/fx_sa/wxwork/install_corp_deploy", paths)
+        self.assertNotIn("token-secret", json.dumps(result, ensure_ascii=False))
+
     def test_active_lock_blocks_concurrent_write(self):
         from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
 

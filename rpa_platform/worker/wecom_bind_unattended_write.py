@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Optional
 from rpa_platform.domain.redaction import redact_context
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient
-from rpa_platform.services.wecom_bind_service import JdyWecomBindService, WecomSecretGenerator
+from rpa_platform.services.wecom_bind_service import JdyWecomBindResult, JdyWecomBindService, WecomSecretGenerator
 from rpa_platform.worker.wecom_bind_real_recovery import (
     BUSINESS_UNEXECUTABLE_REASONS,
     build_bind_input_from_context,
@@ -74,6 +74,21 @@ def run_unattended_wecom_bind_write(
 
         if now is None:
             now = datetime.now()
+        if _has_pending_auditorder_context(existing):
+            return _submit_existing_auditorder(
+                existing=existing,
+                context_file=context_file,
+                write_preflight=write_preflight,
+                preflight_metadata=preflight_metadata,
+                source_context=context,
+                service=JdyWecomBindService(
+                    jdy_client=jdy_client,
+                    wecom_client=wecom_client,
+                    secret_generator=secret_generator,
+                ),
+                wait_seconds=wait_seconds,
+            )
+
         start_result = _start_bind_with_recoverable_context(
             bind_input=bind_input,
             jdy_client=jdy_client,
@@ -153,6 +168,33 @@ def _success_result(
     result.update(_jdy_writeback_fields(start_result.context, source_context or {}))
     for key, value in (preflight_metadata or {}).items():
         result[key] = redact_context(value)
+    return result
+
+
+def _submit_existing_auditorder(
+    existing: Dict[str, Any],
+    context_file: Path,
+    write_preflight: Dict[str, Any],
+    preflight_metadata: Dict[str, Any],
+    source_context: Dict[str, Any],
+    service: JdyWecomBindService,
+    wait_seconds: int,
+) -> Dict[str, Any]:
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+    submit_result = service.submit_online_order(existing)
+    existing.setdefault("wecom", {})["auditorder_status"] = submit_result.context["wecom"].get("auditorder_status")
+    _write_private_json(context_file, existing)
+    start_result = JdyWecomBindResult(status="waiting_wecom_online_delay", context=existing)
+    result = _success_result(
+        write_preflight,
+        context_file,
+        start_result,
+        submit_result,
+        preflight_metadata,
+        source_context=source_context,
+    )
+    result["reason"] = "resumed_existing_auditorder"
     return result
 
 
@@ -245,7 +287,20 @@ def _source_entry_id(context: Dict[str, Any]) -> str:
 
 def _is_success_context(value: Dict[str, Any]) -> bool:
     wecom = value.get("wecom") if isinstance(value.get("wecom"), dict) else {}
-    return wecom.get("auditorder_status") == 5
+    return _auditorder_status(wecom) == 5
+
+
+def _has_pending_auditorder_context(value: Dict[str, Any]) -> bool:
+    wecom = value.get("wecom") if isinstance(value.get("wecom"), dict) else {}
+    auditorderid = str(wecom.get("auditorderid") or "").strip()
+    return bool(auditorderid) and _auditorder_status(wecom) != 5
+
+
+def _auditorder_status(wecom: Dict[str, Any]) -> Optional[int]:
+    try:
+        return int(wecom.get("auditorder_status"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
