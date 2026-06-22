@@ -137,6 +137,23 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(events, ["jdy", "wecom"])
         self.assertEqual(result["status"], "ready_for_real_bind")
 
+    def test_jdy_login_recovery_selector_keeps_jdy_container_candidates_when_wecom_selector_is_configured(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import _jdy_login_recovery_config_from_env
+
+        config = _jdy_login_recovery_config_from_env(
+            {
+                "WECOM_QR_SELECTOR": (
+                    "canvas, img[src*='qr'], img[src*='qrcode'], img[src*='login'], "
+                    "[class*='qr'] canvas, [class*='qr'] img"
+                )
+            }
+        )
+
+        self.assertIn("[id*='qrcode' i]", config.qr_selector)
+        self.assertIn("[id*='qr' i]", config.qr_selector)
+        self.assertIn("[class*='qrcode' i]", config.qr_selector)
+        self.assertIn("[class*='qr' i]", config.qr_selector)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ from rpa_platform.worker.wecom_login_recovery import (
     WecomCookieSessionRefresher,
     WecomLoginRecoveryOrchestrator,
     WecomQrLoginNotifier,
+    DEFAULT_QR_SELECTOR,
 )
 from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError, build_real_clients, run_readonly_preflight
 
@@ -285,7 +286,7 @@ def _jdy_login_recovery_config_from_env(env: Mapping[str, str]) -> LoginRecovery
         browser_profile_dir=str(env.get("JDY_BROWSER_PROFILE_DIR") or ".local/jdy-admin-browser-profile"),
         node_work_dir=str(env.get("JDY_LOGIN_RECOVERY_NODE_WORK_DIR") or ".local/playwright-jdy-login-recovery"),
         login_url=str(env.get("JDY_LOGIN_URL") or "https://dc.jdydevelop.com"),
-        qr_selector=str(env.get("JDY_QR_SELECTOR") or env.get("WECOM_QR_SELECTOR") or "canvas, img[src*='qr'], img[src*='qrcode'], img[src*='login'], [class*='qr'] canvas, [class*='qr'] img, [class*='qrcode'] img, [class*='login'] img"),
+        qr_selector=_jdy_qr_selector_from_env(env),
         browser_channel=str(env.get("JDY_BROWSER_CHANNEL") or env.get("WECOM_BROWSER_CHANNEL") or "chrome"),
         trigger_reason="jdy_session_expired",
         login_not_restored_reason="jdy_login_not_restored",
@@ -299,6 +300,23 @@ def _truthy_env(env: Mapping[str, str], key: str, default: str) -> bool:
 
 def _split_csv(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _jdy_qr_selector_from_env(env: Mapping[str, str]) -> str:
+    configured = str(env.get("JDY_QR_SELECTOR") or env.get("WECOM_QR_SELECTOR") or "").strip()
+    return _merge_selector_lists(configured, DEFAULT_QR_SELECTOR)
+
+
+def _merge_selector_lists(*selector_lists: str) -> str:
+    selectors = []
+    seen = set()
+    for selector_list in selector_lists:
+        for selector in str(selector_list or "").split(","):
+            item = selector.strip()
+            if item and item not in seen:
+                selectors.append(item)
+                seen.add(item)
+    return ", ".join(selectors)
 
 
 def _missing_required_fields(context: Dict[str, Any]) -> list[str]:
