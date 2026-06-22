@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import secrets
 import string
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from rpa_platform.integrations.jdy_admin_client import (
     JdyAdminClient,
@@ -10,7 +10,15 @@ from rpa_platform.integrations.jdy_admin_client import (
     JdyInstallRequest,
     OwnerCannotBindError,
 )
-from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomSaveAppRequest
+from rpa_platform.domain.redaction import mask_identifier
+from rpa_platform.integrations.wecom_admin_client import (
+    AmbiguousWecomAppError,
+    MissingWecomAppError,
+    WecomAdminClient,
+    WecomAdminError,
+    WecomCustomApp,
+    WecomSaveAppRequest,
+)
 
 
 class WecomSecretGenerator(Protocol):
@@ -55,6 +63,139 @@ class JdyWecomBindResult:
     next_check_at: Optional[datetime] = None
 
 
+@dataclass(frozen=True)
+class WecomLookupCandidate:
+    source: str
+    name: str
+
+
+@dataclass(frozen=True)
+class WecomAppResolution:
+    app: WecomCustomApp
+    candidates: List[WecomLookupCandidate]
+    matched_sources: List[str]
+    conflict_summary: List[Dict[str, str]]
+
+
+class WecomAppCandidateLookupError(WecomAdminError):
+    def __init__(
+        self,
+        reason: str,
+        candidates: List[WecomLookupCandidate],
+        matched_sources: Optional[List[str]] = None,
+        conflict_summary: Optional[List[Dict[str, str]]] = None,
+        detail: str = "",
+    ):
+        self.reason = reason
+        self.candidates = list(candidates)
+        self.matched_sources = list(matched_sources or [])
+        self.conflict_summary = list(conflict_summary or [])
+        super().__init__(detail or reason)
+
+
+def build_wecom_lookup_candidates(
+    request: JdyWecomBindInput,
+    corp_name: str,
+) -> List[WecomLookupCandidate]:
+    candidates: List[WecomLookupCandidate] = []
+    seen = set()
+    for source, name in (
+        ("jdy_corp_name", corp_name),
+        ("incoming_enterprise_name", request.enterprise_name),
+        ("enterprise_short_name", request.enterprise_short_name),
+    ):
+        clean_name = str(name or "").strip()
+        if not clean_name or clean_name in seen:
+            continue
+        seen.add(clean_name)
+        candidates.append(WecomLookupCandidate(source=source, name=clean_name))
+    return candidates
+
+
+def resolve_wecom_app_for_bind(
+    wecom_client: WecomAdminClient,
+    request: JdyWecomBindInput,
+    corp_name: str,
+) -> WecomAppResolution:
+    candidates = build_wecom_lookup_candidates(request, corp_name)
+    matches: List[tuple[WecomLookupCandidate, WecomCustomApp]] = []
+    for candidate in candidates:
+        try:
+            app = wecom_client.resolve_unique_custom_app(
+                suiteid=request.wecom_suiteid,
+                enterprise_name=candidate.name,
+                suite_name=request.suite_name,
+            )
+        except MissingWecomAppError:
+            continue
+        except AmbiguousWecomAppError as exc:
+            raise WecomAppCandidateLookupError(
+                reason="wecom_app_ambiguous",
+                candidates=candidates,
+                matched_sources=[candidate.source],
+                detail=str(exc),
+            ) from exc
+        matches.append((candidate, app))
+
+    if not matches:
+        raise WecomAppCandidateLookupError(
+            reason="wecom_app_not_found",
+            candidates=candidates,
+            detail="no candidate enterprise name matched a unique WeCom custom app",
+        )
+
+    app_ids = {app.app_id for _candidate, app in matches}
+    conflict_summary = [
+        {
+            "source": candidate.source,
+            "name": candidate.name,
+            "app_id": mask_identifier(app.app_id),
+            "authcorp_name": app.authcorp_name,
+        }
+        for candidate, app in matches
+    ]
+    if len(app_ids) > 1:
+        raise WecomAppCandidateLookupError(
+            reason="wecom_app_lookup_conflict",
+            candidates=candidates,
+            matched_sources=[candidate.source for candidate, _app in matches],
+            conflict_summary=conflict_summary,
+            detail="candidate enterprise names matched different WeCom custom apps",
+        )
+
+    return WecomAppResolution(
+        app=matches[0][1],
+        candidates=candidates,
+        matched_sources=[candidate.source for candidate, _app in matches],
+        conflict_summary=conflict_summary,
+    )
+
+
+def wecom_lookup_summary(resolution: Optional[WecomAppResolution]) -> Dict[str, Any]:
+    if resolution is None:
+        return {"lookup_source": "", "lookup_sources": [], "lookup_candidates": []}
+    return {
+        "lookup_source": resolution.matched_sources[0] if resolution.matched_sources else "",
+        "lookup_sources": list(resolution.matched_sources),
+        "lookup_candidates": [
+            {"source": candidate.source, "name": candidate.name}
+            for candidate in resolution.candidates
+        ],
+    }
+
+
+def wecom_lookup_error_summary(error: WecomAppCandidateLookupError) -> Dict[str, Any]:
+    return {
+        "lookup_source": "",
+        "lookup_sources": list(error.matched_sources),
+        "lookup_candidates": [
+            {"source": candidate.source, "name": candidate.name}
+            for candidate in error.candidates
+        ],
+        "lookup_conflict": list(error.conflict_summary),
+    }
+
+
 class JdyWecomBindService:
     def __init__(
         self,
@@ -74,12 +215,8 @@ class JdyWecomBindService:
             request.plain_corp_id,
             request.enterprise_short_name or request.enterprise_name,
         )
-        wecom_authcorp_name = request.enterprise_short_name or corp.name or request.enterprise_name
-        app = self.wecom_client.resolve_unique_custom_app(
-            suiteid=request.wecom_suiteid,
-            enterprise_name=wecom_authcorp_name,
-            suite_name=request.suite_name,
-        )
+        wecom_resolution = resolve_wecom_app_for_bind(self.wecom_client, request, corp.name)
+        app = wecom_resolution.app
         secrets_payload = self.secret_generator.generate()
         homeurl = "https://wxwork.jiandaoyun.com/wxwork/%s/dashboard" % corp.corp_id
         callbackurl = "https://wxwork.jiandaoyun.com/wxwork/corp/%s/service" % corp.corp_id
@@ -150,6 +287,7 @@ class JdyWecomBindService:
                 "suite_name": request.suite_name,
                 "app_id": app.app_id,
                 "aes_app_id": app.aes_app_id,
+                **wecom_lookup_summary(wecom_resolution),
                 "homeurl": homeurl,
                 "callbackurl": callbackurl,
                 "redirect_domain": redirect_domain,

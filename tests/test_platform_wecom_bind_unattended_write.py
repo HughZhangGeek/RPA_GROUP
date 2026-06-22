@@ -193,6 +193,88 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
         self.assertEqual(result["login_recovery"]["notify_attempts"], 1)
         self.assertIn("/wwopen/developer/order/set", [call["path"] for call in wecom_transport.calls])
 
+    def test_real_write_reuses_candidate_lookup_instead_of_wrong_incoming_short_name(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        class MismatchedJdyTransport(FakeServiceJdyAdminTransport):
+            def post_json(self, path, payload):
+                response = super().post_json(path, payload)
+                if path == "/api/fx_sa/wxwork/get_corp_deploy_list":
+                    response["corp_deploy_list"][0]["name"] = "温州华绘印务"
+                return response
+
+        class CandidateWecomTransport(FakeServiceWecomAdminTransport):
+            def get_json(self, path, params, headers):
+                self.calls.append({"method": "GET", "path": path, "params": dict(params), "headers": dict(headers)})
+                if path == "/wwopen/developer/customApp/tpl/app/list":
+                    keyword = params.get("corp_name_keyword")
+                    if keyword == "温州华绘印务":
+                        return {
+                            "data": {
+                                "corpapp": [
+                                    {
+                                        "app_id": "app-huahui",
+                                        "authcorp_name": "温州华绘印务",
+                                        "name": "简道云",
+                                        "logo": "logo-url",
+                                        "description": "desc",
+                                        "customized_app_status": 0,
+                                        "sdk_auth": {"aes_app_id": "aes-huahui"},
+                                    }
+                                ]
+                            }
+                        }
+                    if keyword == "温州市华绘印务有限公司":
+                        return {"data": {"corpapp": []}}
+                raise ValueError("Unsupported fake WeCom service GET path: %s" % path)
+
+            def post_json(self, path, payload, headers):
+                if path == "/wwopen/developer/order/add":
+                    return {
+                        "data": {
+                            "auditorder": {
+                                "auditorderid": "order-huahui",
+                                "corpappid": "app-huahui",
+                                "authcorp_name": "温州华绘印务",
+                                "status": 1,
+                            }
+                        }
+                    }
+                return super().post_json(path, payload, headers)
+
+        context = dict(self._context())
+        context.update(
+            {
+                "enterprise_name": "温州市华绘印务有限公司",
+                "enterprise_short_name": "温州市华绘印务有限公司",
+                "plain_corp_id": "ww-huahui",
+            }
+        )
+        jdy_client, wecom_client, _jdy_transport, wecom_transport = self._clients(
+            jdy_transport=MismatchedJdyTransport(),
+            wecom_transport=CandidateWecomTransport(),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_unattended_wecom_bind_write(
+                task_id="task-huahui",
+                context=context,
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                preflight_runner=lambda *_args, **_kwargs: {"status": "ok", "reason": "ready_for_confirm_write"},
+                context_file=Path(tmpdir) / "context.json",
+                lock_file=Path(tmpdir) / "write.lock",
+                now=datetime(2026, 6, 20, 12, 0, 0),
+                wait_seconds=0,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["start_result"]["context"]["wecom"]["lookup_source"], "jdy_corp_name")
+        self.assertEqual(
+            [call["params"]["corp_name_keyword"] for call in wecom_transport.calls if call["method"] == "GET"],
+            ["温州华绘印务", "温州市华绘印务有限公司"],
+        )
+
     def test_missing_cookie_or_login_source_returns_blocked_without_write(self):
         from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError
         from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write

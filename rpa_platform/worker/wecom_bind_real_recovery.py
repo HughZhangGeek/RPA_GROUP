@@ -28,6 +28,9 @@ BUSINESS_UNEXECUTABLE_REASONS = {
     "jdy_corp_not_unique_or_missing",
     "owner_cannot_bind_or_update_corp_secret",
     "wecom_app_not_unique_or_missing",
+    "wecom_app_not_found",
+    "wecom_app_ambiguous",
+    "wecom_app_lookup_conflict",
     "wecom_app_id_missing",
     "wecom_aes_app_id_missing",
 }

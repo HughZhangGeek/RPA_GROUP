@@ -22,11 +22,13 @@ class FakeJdyTransport(JdyAdminTransport):
         can_bind_corp_secret=True,
         can_update_corp_secret=False,
         install_response=None,
+        corp_name="上海测试客户",
     ):
         self.call_log = call_log
         self.can_bind_corp_secret = can_bind_corp_secret
         self.can_update_corp_secret = can_update_corp_secret
         self.install_response = install_response or {"tenant_id": "user-1", "owner_id": "user-1"}
+        self.corp_name = corp_name
         self.calls = []
 
     def post_json(self, path, payload):
@@ -39,7 +41,7 @@ class FakeJdyTransport(JdyAdminTransport):
                 "corp_deploy_list": [
                     {
                         "corp_id": "corp-secret",
-                        "name": "上海测试客户",
+                        "name": self.corp_name,
                         "tenant_id": "old-user",
                         "suite_name": "简道云",
                         "integrate_suite_name": "简道云集成",
@@ -59,8 +61,9 @@ class FakeJdyTransport(JdyAdminTransport):
 
 
 class FakeWecomTransport(WecomAdminTransport):
-    def __init__(self, call_log):
+    def __init__(self, call_log, apps_by_keyword=None):
         self.call_log = call_log
+        self.apps_by_keyword = apps_by_keyword
         self.calls = []
 
     def get_json(self, path, params, headers):
@@ -68,6 +71,8 @@ class FakeWecomTransport(WecomAdminTransport):
         self.calls.append(call)
         self.call_log.append(call)
         if path == "/wwopen/developer/customApp/tpl/app/list":
+            if self.apps_by_keyword is not None:
+                return {"data": {"corpapp": self.apps_by_keyword.get(params.get("corp_name_keyword"), [])}}
             return {
                 "data": {
                     "corpapp": [
@@ -137,14 +142,17 @@ def make_service(
     can_bind_corp_secret=True,
     can_update_corp_secret=False,
     install_response=None,
+    corp_name="上海测试客户",
+    apps_by_keyword=None,
 ):
     jdy_transport = FakeJdyTransport(
         call_log,
         can_bind_corp_secret=can_bind_corp_secret,
         can_update_corp_secret=can_update_corp_secret,
         install_response=install_response,
+        corp_name=corp_name,
     )
-    wecom_transport = FakeWecomTransport(call_log)
+    wecom_transport = FakeWecomTransport(call_log, apps_by_keyword=apps_by_keyword)
     service = JdyWecomBindService(
         jdy_client=JdyAdminClient(jdy_transport),
         wecom_client=WecomAdminClient(wecom_transport),
@@ -201,6 +209,9 @@ class JdyWecomBindServiceTest(unittest.TestCase):
                 "suite_name": "简道云",
                 "app_id": "app-1",
                 "aes_app_id": "aes-app-1",
+                "lookup_source": "jdy_corp_name",
+                "lookup_sources": ["jdy_corp_name"],
+                "lookup_candidates": [{"source": "jdy_corp_name", "name": "上海测试客户"}],
                 "homeurl": "https://wxwork.jiandaoyun.com/wxwork/corp-secret/dashboard",
                 "callbackurl": "https://wxwork.jiandaoyun.com/wxwork/corp/corp-secret/service",
                 "redirect_domain": "wxwork.jiandaoyun.com",
@@ -283,6 +294,48 @@ class JdyWecomBindServiceTest(unittest.TestCase):
         self.assertIn("/api/fx_sa/wxwork/install_corp_deploy", all_paths)
         self.assertIn("/wwopen/developer/customApp/tpl/corpApp", all_paths)
         self.assertEqual(result.context["wecom"]["token"], "token-secret")
+
+    def test_start_bind_uses_jdy_corp_name_candidate_before_wrong_incoming_short_name(self):
+        call_log = []
+        service, _jdy_transport, wecom_transport = make_service(
+            call_log,
+            corp_name="温州华绘印务",
+            apps_by_keyword={
+                "温州华绘印务": [
+                    {
+                        "app_id": "app-huahui",
+                        "authcorp_name": "温州华绘印务",
+                        "name": "简道云",
+                        "logo": "logo-url",
+                        "description": "desc",
+                        "customized_app_status": 0,
+                        "sdk_auth": {"aes_app_id": "aes-huahui"},
+                    }
+                ],
+                "温州市华绘印务有限公司": [],
+            },
+        )
+
+        result = service.start_bind(
+            JdyWecomBindInput(
+                enterprise_name="温州市华绘印务有限公司",
+                enterprise_short_name="温州市华绘印务有限公司",
+                plain_corp_id="ww-huahui",
+                requested_user_id="user-1",
+                suite_id=1,
+                suite_scenario="main",
+                wecom_suiteid=1009479,
+                suite_name="简道云",
+            ),
+            now=datetime(2026, 6, 16, 10, 0, 0),
+        )
+
+        self.assertEqual(result.context["wecom"]["app_id"], "app-huahui")
+        self.assertEqual(result.context["wecom"]["lookup_source"], "jdy_corp_name")
+        self.assertEqual(
+            [call["params"]["corp_name_keyword"] for call in wecom_transport.calls if call["method"] == "GET"],
+            ["温州华绘印务", "温州市华绘印务有限公司"],
+        )
 
     def test_start_bind_rejects_empty_install_result_without_wecom_writes(self):
         call_log = []

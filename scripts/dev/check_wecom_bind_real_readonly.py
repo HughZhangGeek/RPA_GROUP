@@ -13,7 +13,13 @@ if str(REPO_ROOT) not in sys.path:
 from rpa_platform.domain.redaction import mask_identifier
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient, JdyAdminError, JdyCorpDeploy
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomAdminError, WecomSessionExpiredError
-from rpa_platform.services.wecom_bind_service import JdyWecomBindInput
+from rpa_platform.services.wecom_bind_service import (
+    JdyWecomBindInput,
+    WecomAppCandidateLookupError,
+    resolve_wecom_app_for_bind,
+    wecom_lookup_error_summary,
+    wecom_lookup_summary,
+)
 
 
 JDY_BASE_URL = "https://dc.jdydevelop.com"
@@ -150,14 +156,8 @@ def run_readonly_preflight(
         )
 
     try:
-        wecom_authcorp_name = corp.name if corp_name_mismatch else (
-            bind_input.enterprise_short_name or corp.name or bind_input.enterprise_name
-        )
-        app = wecom_client.resolve_unique_custom_app(
-            suiteid=bind_input.wecom_suiteid,
-            enterprise_name=wecom_authcorp_name,
-            suite_name=bind_input.suite_name,
-        )
+        wecom_resolution = resolve_wecom_app_for_bind(wecom_client, bind_input, corp.name)
+        app = wecom_resolution.app
     except WecomSessionExpiredError as exc:
         return _failure_summary(
             bind_input,
@@ -165,6 +165,17 @@ def run_readonly_preflight(
             exc,
             corp=corp,
             owner_state=owner_state,
+        )
+    except WecomAppCandidateLookupError as exc:
+        return _summary(
+            bind_input=bind_input,
+            corp=corp,
+            app=None,
+            status="blocked",
+            reason=exc.reason,
+            owner_state=owner_state,
+            corp_name_mismatch=corp_name_mismatch,
+            wecom_lookup=wecom_lookup_error_summary(exc),
         )
     except (WecomAdminError, JsonHttpError) as exc:
         return _failure_summary(
@@ -184,9 +195,6 @@ def run_readonly_preflight(
     elif owner_state == "can_update_corp_secret":
         reason = "owner_already_bound_can_update_corp_secret"
         status = "review"
-    elif corp_name_mismatch:
-        reason = "jdy_corp_name_mismatch"
-        status = "review"
     else:
         reason = "ready_for_confirm_write"
         status = "ok"
@@ -198,6 +206,8 @@ def run_readonly_preflight(
         status=status,
         reason=reason,
         owner_state=owner_state,
+        corp_name_mismatch=corp_name_mismatch,
+        wecom_lookup=wecom_lookup_summary(wecom_resolution),
     )
 
 
@@ -369,7 +379,10 @@ def _summary(
     status: str,
     reason: str,
     owner_state: str,
+    corp_name_mismatch: bool = False,
+    wecom_lookup: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    wecom_lookup = wecom_lookup or {}
     return {
         "status": status,
         "reason": reason,
@@ -386,6 +399,7 @@ def _summary(
             "suite_name": corp.suite_name,
             "integrate_suite_name": corp.integrate_suite_name,
             "owner_state": owner_state,
+            "corp_name_mismatch": corp_name_mismatch,
         },
         "wecom": {
             "suiteid": bind_input.wecom_suiteid,
@@ -394,6 +408,7 @@ def _summary(
             "authcorp_name": app.authcorp_name if app else "",
             "aes_app_id": mask_identifier(app.aes_app_id) if app else "",
             "customized_app_status": app.customized_app_status if app else None,
+            **wecom_lookup,
         },
     }
 
