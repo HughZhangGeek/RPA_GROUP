@@ -35,6 +35,7 @@ def run_unattended_wecom_bind_write(
     lock_file: Optional[Path] = None,
     now: Optional[datetime] = None,
     wait_seconds: int = 300,
+    login_recovery: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     context_file = context_file or default_context_file(task_id)
     lock_file = lock_file or default_lock_file()
@@ -66,6 +67,8 @@ def run_unattended_wecom_bind_write(
             }
 
         write_preflight, preflight_metadata = _preflight_for_write(preflight)
+        if login_recovery and "login_recovery" not in preflight_metadata:
+            preflight_metadata["login_recovery"] = login_recovery
         if write_preflight is None:
             return _blocked_preflight_result(preflight)
 
