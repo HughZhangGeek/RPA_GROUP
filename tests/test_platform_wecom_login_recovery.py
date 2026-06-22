@@ -732,6 +732,15 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
         self.assertIn("boundingBox", script)
         self.assertIn("box.width >= minQrEdge", script)
 
+    def test_qr_capture_script_reuses_persistent_context_default_page(self):
+        from rpa_platform.worker.wecom_login_recovery import _node_qr_capture_script
+
+        script = _node_qr_capture_script()
+
+        self.assertIn("context.pages()", script)
+        self.assertIn("pages[0]", script)
+        self.assertNotIn("context.newPage()", script)
+
 
 class WecomCookieSessionTest(unittest.TestCase):
     def test_playwright_cookie_exporter_reads_cookie_from_persistent_profile(self):

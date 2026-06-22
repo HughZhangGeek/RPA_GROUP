@@ -927,9 +927,17 @@ async function findQrLocator(page, selector) {
   throw new Error(`No visible WeCom login QR matched selector: ${selector}`);
 }
 
+async function initialPage(context) {
+  const pages = context.pages();
+  if (pages.length > 0) {
+    return pages[0];
+  }
+  return await context['newPage']();
+}
+
 const context = await chromium.launchPersistentContext(profileDir, launchOptions);
 try {
-  const page = await context.newPage();
+  const page = await initialPage(context);
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
   const locator = await findQrLocator(page, qrSelector);
   await locator.screenshot({ path: outputPath });
