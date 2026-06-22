@@ -247,8 +247,8 @@ def _build_jdy_orchestrator(
     )
     notifier = GenericQrLoginNotifier(
         WecomBotClient(config.qr_notify_webhook_url),
-        title="简道云管理后台登录",
-        status_text="简道云管理后台登录态失效，等待管理员扫码恢复",
+        title="简道眼登录",
+        status_text="简道眼登录态失效，等待管理员扫码恢复",
         mentioned_mobile_list=config.qr_notify_mention_mobiles,
         notify_mode=config.qr_notify_mode,
     )

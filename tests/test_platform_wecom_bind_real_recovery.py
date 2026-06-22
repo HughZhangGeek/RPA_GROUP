@@ -154,6 +154,26 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertIn("[class*='qrcode' i]", config.qr_selector)
         self.assertIn("[class*='qr' i]", config.qr_selector)
 
+    def test_jdy_login_recovery_notifier_uses_jdyan_login_text(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import (
+            _build_jdy_orchestrator,
+            _jdy_login_recovery_config_from_env,
+        )
+
+        config = _jdy_login_recovery_config_from_env({})
+        orchestrator = _build_jdy_orchestrator(
+            config,
+            {},
+            {
+                "enterprise_name": "zh_test_上海测试客户",
+                "plain_corp_id": "ww_test_corp",
+                "requested_user_id": "zh_test_user",
+            },
+        )
+
+        self.assertEqual(orchestrator.notifier.title, "简道眼登录")
+        self.assertIn("简道眼登录态失效", orchestrator.notifier.status_text)
+
 
 if __name__ == "__main__":
     unittest.main()
