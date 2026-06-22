@@ -8,6 +8,8 @@ from subprocess import CompletedProcess
 from pathlib import Path
 
 from rpa_platform.worker.wecom_login_recovery import (
+    GenericQrLoginNotifier,
+    JdyCookieFileReadonlyProbe,
     LoginRecoveryConfig,
     LoginSessionHealthChecker,
     LoginSessionStatus,
@@ -326,6 +328,75 @@ class WecomLoginRecoveryOrchestratorTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason"], "wecom_session_expired")
+
+    def test_can_recover_jdy_session_with_configured_trigger_reason(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            qr_path = Path(tmpdir) / "jdy-qr.png"
+            qr_path.write_bytes(b"qr")
+            preflight_results = [
+                {"status": "blocked", "reason": "jdy_session_expired", "detail": "用户尚未登录"},
+                {"status": "ok", "reason": "ready_for_confirm_write"},
+            ]
+            notifier = FakeNotifier()
+            orchestrator = WecomLoginRecoveryOrchestrator(
+                config=LoginRecoveryConfig(
+                    enabled=True,
+                    qr_notify_enabled=True,
+                    ttl_seconds=30,
+                    poll_interval_seconds=1,
+                    max_notify_times=1,
+                    trigger_reason="jdy_session_expired",
+                    login_not_restored_reason="jdy_login_not_restored",
+                    retry_action="retry_jdy_login_qr",
+                ),
+                preflight=lambda: preflight_results.pop(0),
+                health_checker=LoginSessionHealthChecker(
+                    FakeReadonlyProbe(
+                        [
+                            {"code": 1007, "error": "用户尚未登录"},
+                            {"corp_deploy_list": []},
+                        ]
+                    )
+                ),
+                qr_provider=FakeQrProvider(qr_path),
+                notifier=notifier,
+                sleep=lambda seconds: None,
+                now=lambda: 1000.0,
+            )
+
+            result = orchestrator.run(task_id="task-jdy", context={"enterprise_name": "上海测试客户"})
+
+        self.assertEqual(result["status"], "ready_for_real_bind")
+        self.assertEqual(result["preflight"]["status"], "ok")
+        self.assertEqual(notifier.calls[0]["task_id"], "task-jdy")
+
+    def test_jdy_cookie_file_probe_classifies_valid_and_expired_session(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cookie_file = Path(tmpdir) / "jdy.cookie"
+            cookie_file.write_text("jdy-cookie", encoding="utf-8")
+            requests = []
+
+            def fake_request(path, payload, headers):
+                requests.append({"path": path, "payload": payload, "headers": headers})
+                return {"corp_deploy_list": []}
+
+            probe = JdyCookieFileReadonlyProbe(cookie_file, filter_text="ww001", request_json=fake_request)
+
+            restored = LoginSessionHealthChecker(probe).check()
+
+            self.assertEqual(restored.status, LoginSessionStatus.RESTORED)
+            self.assertEqual(requests[0]["path"], "/api/fx_sa/wxwork/get_corp_deploy_list")
+            self.assertNotIn("jdy-cookie", str(restored))
+
+            expired = LoginSessionHealthChecker(
+                JdyCookieFileReadonlyProbe(
+                    cookie_file,
+                    filter_text="ww001",
+                    request_json=lambda *_args: {"code": 1007, "error": "用户尚未登录"},
+                )
+            ).check()
+
+            self.assertEqual(expired.status, LoginSessionStatus.EXPIRED)
 
 
 class LoginRecoveryConfigTest(unittest.TestCase):

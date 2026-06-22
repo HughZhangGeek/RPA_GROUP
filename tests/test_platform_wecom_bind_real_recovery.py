@@ -114,6 +114,29 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(result["preflight"]["status"], "ok")
         self.assertEqual(result["login_recovery"]["notify_attempts"], 1)
 
+    def test_chained_login_recovery_runs_wecom_after_jdy_restore_exposes_wecom_expired(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import ChainedLoginRecoveryOrchestrator
+
+        events = []
+
+        class FakeJdyRecovery:
+            def run(self, task_id, context):
+                events.append("jdy")
+                return {"status": "blocked", "reason": "wecom_session_expired"}
+
+        class FakeWecomRecovery:
+            def run(self, task_id, context):
+                events.append("wecom")
+                return {"status": "ready_for_real_bind", "preflight": {"status": "ok"}}
+
+        result = ChainedLoginRecoveryOrchestrator(FakeJdyRecovery(), FakeWecomRecovery()).run(
+            task_id="task-both-expired",
+            context={"enterprise_name": "zh_test_上海测试客户"},
+        )
+
+        self.assertEqual(events, ["jdy", "wecom"])
+        self.assertEqual(result["status"], "ready_for_real_bind")
+
 
 if __name__ == "__main__":
     unittest.main()

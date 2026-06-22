@@ -279,6 +279,25 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["reason"], "jdy_corp_not_unique_or_missing")
         self.assertNotIn("ww-plain-secret", serialized)
 
+    def test_readonly_preflight_reports_jdy_session_expired(self):
+        from scripts.dev.check_wecom_bind_real_readonly import JsonHttpError, run_readonly_preflight
+
+        class ExpiredJdyTransport(JdyAdminTransport):
+            def post_json(self, path, payload):
+                raise JsonHttpError(
+                    'POST https://dc.jdydevelop.com/api/fx_sa/wxwork/get_owner failed: {"code":1007,"error":"用户尚未登录"}'
+                )
+
+        result = run_readonly_preflight(
+            make_request(),
+            jdy_client=JdyAdminClient(ExpiredJdyTransport()),
+            wecom_client=WecomAdminClient(RecordingWecomTransport()),
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "jdy_session_expired")
+        self.assertIn("用户尚未登录", result["detail"])
+
     def test_readonly_preflight_reports_wecom_session_expired(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
 

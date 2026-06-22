@@ -108,6 +108,8 @@ def run_readonly_preflight(
     try:
         corp = jdy_client.resolve_unique_corp(bind_input.plain_corp_id, jdy_lookup_name)
     except (JdyAdminError, JsonHttpError) as exc:
+        if _is_jdy_session_expired_error(exc):
+            return _failure_summary(bind_input, "jdy_session_expired", exc)
         try:
             owner = jdy_client.check_wework_owner(
                 bind_input.requested_user_id,
@@ -115,6 +117,8 @@ def run_readonly_preflight(
                 suite_scenario=bind_input.suite_scenario,
             )
         except (JdyAdminError, JsonHttpError) as owner_exc:
+            if _is_jdy_session_expired_error(owner_exc):
+                return _failure_summary(bind_input, "jdy_session_expired", owner_exc)
             return _failure_summary(bind_input, "jdy_corp_not_unique_or_missing", owner_exc)
         corp = _recover_corp_from_owner(bind_input, owner)
         if corp is None:
@@ -130,6 +134,8 @@ def run_readonly_preflight(
                 suite_scenario=bind_input.suite_scenario,
             )
         except (JdyAdminError, JsonHttpError) as exc:
+            if _is_jdy_session_expired_error(exc):
+                return _failure_summary(bind_input, "jdy_session_expired", exc, corp=corp)
             return _failure_summary(bind_input, "jdy_owner_check_failed", exc, corp=corp)
 
     owner_state = _owner_state(owner.can_bind_corp_secret, owner.can_update_corp_secret)
@@ -271,7 +277,15 @@ def _request_json(
         with request.urlopen(req, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except Exception as exc:
-        raise JsonHttpError("%s %s failed: %s" % (method, _safe_url(url), exc)) from exc
+        detail = str(exc)
+        if hasattr(exc, "read"):
+            try:
+                error_body = exc.read().decode("utf-8")
+            except Exception:
+                error_body = ""
+            if error_body:
+                detail = "%s %s" % (detail, error_body)
+        raise JsonHttpError("%s %s failed: %s" % (method, _safe_url(url), detail)) from exc
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -293,7 +307,10 @@ def _read_cookie(env_name: str, file_env_name: str, explicit_file: Optional[str]
                 file_env_name,
             )
         )
-    cookie = Path(path).read_text(encoding="utf-8").strip()
+    try:
+        cookie = Path(path).read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise CookieSourceError("cookie file does not exist: %s" % path) from exc
     if not cookie:
         raise CookieSourceError("cookie file is empty: %s" % path)
     return cookie
@@ -302,6 +319,11 @@ def _read_cookie(env_name: str, file_env_name: str, explicit_file: Optional[str]
 def _safe_url(url: str) -> str:
     parsed = parse.urlsplit(url)
     return parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _is_jdy_session_expired_error(exc: Exception) -> bool:
+    message = str(exc)
+    return '"code":1007' in message or "code=1007" in message or "用户尚未登录" in message
 
 
 def _owner_state(can_bind: bool, can_update: bool) -> str:

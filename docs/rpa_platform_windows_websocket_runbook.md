@@ -606,21 +606,40 @@ $env:RPA_WORKER_ALLOW_UNATTENDED_WRITE="true"
 
 若 `RPA_WORKER_ALLOW_UNATTENDED_WRITE` 未开启，或 payload 未带 `unattended_write=true` / `confirm_write=true`，worker 继续停在只读预检结果：`ready_for_real_bind` / `manual_confirm_required` / `manual_action_required`，不写 JDY、不提交企微线上订单。
 
-若无人值守写入已开启且只读预检遇到企微服务商后台未登录，worker 会在同一次任务中进入登录恢复编排：
+若无人值守写入已开启且只读预检遇到登录态失效，worker 会在同一次任务中进入登录恢复编排：
 
 ```text
-readonly preflight 返回 wecom_session_expired
+readonly preflight 返回 jdy_session_expired
+-> 截取简道云管理后台登录二维码
+-> 通过配置的企微机器人发送 JDY QR 通知
+-> 在 TTL 内轮询 cookie/只读接口
+-> 管理员扫码后刷新 JDY cookie
+-> 重跑 readonly preflight
+-> 如果继续返回 wecom_session_expired
 -> 截取企微服务商后台登录二维码
 -> 通过配置的企微机器人发送 QR 通知
 -> 在 TTL 内轮询 cookie/只读接口
--> 管理员扫码后刷新 cookie
+-> 管理员扫码后刷新企微 cookie
 -> 重跑 readonly preflight
 -> 达到 ready_for_real_bind / manual_confirm_required
 -> 重新读取最新 cookie 构造写入 client
 -> 继续真实写入并提交线上订单
 ```
 
-如果 TTL 内未扫码恢复，任务返回 `waiting_login` / `manual_action_required`，并携带 `queue_control.action=pause`；不会进入 `real_write_started`，也不会写 JDY 或提交企微线上订单。控制面后续可带回 `notify_attempts` 重新派发同任务，剩余通知次数由 `WECOM_QR_MAX_NOTIFY_TIMES` 控制。
+如果 JDY 和企微都未登录，二维码不是同时发送，而是按依赖顺序发送：先 JDY QR，JDY 恢复并重跑预检后，如企微仍未登录，再发送企微 QR。任一平台 TTL 内未扫码恢复，任务返回 `waiting_login` / `manual_action_required`，并携带 `queue_control.action=pause`；不会进入 `real_write_started`，也不会写 JDY 或提交企微线上订单。控制面后续可带回 `notify_attempts` 重新派发同任务，剩余通知次数由 `JDY_QR_MAX_NOTIFY_TIMES` / `WECOM_QR_MAX_NOTIFY_TIMES` 控制。
+
+JDY 登录恢复可选环境变量如下；未单独配置时，通知 webhook 和部分 QR 参数可复用企微登录恢复配置：
+
+```ini
+JDY_LOGIN_RECOVERY_ENABLED=true
+JDY_QR_NOTIFY_ENABLED=true
+JDY_QR_NOTIFY_WEBHOOK_URL=<可为空，默认复用 WECOM_QR_NOTIFY_WEBHOOK_URL>
+JDY_QR_ARTIFACT_DIR=C:/rpa_work/RPA_GROUP/.local/jdy-login-qr
+JDY_ADMIN_COOKIE_FILE=C:/rpa_work/RPA_GROUP/.local/jdy-admin.cookie
+JDY_BROWSER_PROFILE_DIR=C:/rpa_work/RPA_GROUP/.local/jdy-admin-browser-profile
+JDY_LOGIN_RECOVERY_NODE_WORK_DIR=C:/rpa_work/RPA_GROUP/.local/playwright-jdy-login-recovery
+JDY_LOGIN_URL=https://dc.jdydevelop.com
+```
 
 无人值守写入事件顺序：
 

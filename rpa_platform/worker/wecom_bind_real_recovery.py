@@ -5,6 +5,8 @@ from rpa_platform.notifications.wecom_bot import WecomBotClient
 from rpa_platform.services.wecom_bind_service import JdyWecomBindInput, RandomWecomSecretGenerator
 from rpa_platform.worker.wecom_bind_recovery_handler import WecomBindRecoveryTaskHandler
 from rpa_platform.worker.wecom_login_recovery import (
+    GenericQrLoginNotifier,
+    JdyCookieFileReadonlyProbe,
     LoginRecoveryConfig,
     LoginSessionHealthChecker,
     PlaywrightQrArtifactProvider,
@@ -14,7 +16,7 @@ from rpa_platform.worker.wecom_login_recovery import (
     WecomLoginRecoveryOrchestrator,
     WecomQrLoginNotifier,
 )
-from scripts.dev.check_wecom_bind_real_readonly import build_real_clients, run_readonly_preflight
+from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError, build_real_clients, run_readonly_preflight
 
 
 class RealWecomBindRecovery:
@@ -105,8 +107,19 @@ class RealWecomBindUnattendedWriteRecovery:
     def _build_login_recovery(self, context: Dict[str, Any]) -> Any:
         if self.login_recovery_factory is not None:
             return self.login_recovery_factory(context)
-        config = LoginRecoveryConfig.from_env(self.env)
-        return _build_orchestrator(config, context)
+        return _build_chained_login_recovery(self.env, context)
+
+
+class ChainedLoginRecoveryOrchestrator:
+    def __init__(self, jdy_recovery: Any, wecom_recovery: Any):
+        self.jdy_recovery = jdy_recovery
+        self.wecom_recovery = wecom_recovery
+
+    def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        jdy_result = dict(self.jdy_recovery.run(task_id=task_id, context=context))
+        if jdy_result.get("reason") == "wecom_session_expired":
+            return dict(self.wecom_recovery.run(task_id=task_id, context=context))
+        return jdy_result
 
 
 def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
@@ -141,10 +154,13 @@ def _build_orchestrator(config: LoginRecoveryConfig, context: Dict[str, Any]) ->
     bind_input = build_bind_input_from_context(context)
 
     def preflight() -> Dict[str, Any]:
-        clients = build_real_clients(
-            jdy_cookie_file=str(context.get("jdy_cookie_file") or ""),
-            wecom_cookie_file=config.cookie_file,
-        )
+        try:
+            clients = build_real_clients(
+                jdy_cookie_file=str(context.get("jdy_cookie_file") or ""),
+                wecom_cookie_file=config.cookie_file,
+            )
+        except CookieSourceError as exc:
+            return {"status": "blocked", "reason": "wecom_session_expired", "detail": str(exc)}
         return run_readonly_preflight(bind_input, **clients)
 
     health_checker = LoginSessionHealthChecker(
@@ -185,6 +201,104 @@ def _build_orchestrator(config: LoginRecoveryConfig, context: Dict[str, Any]) ->
         notifier=notifier,
         session_refresher=session_refresher,
     )
+
+
+def _build_chained_login_recovery(env: Mapping[str, str], context: Dict[str, Any]) -> ChainedLoginRecoveryOrchestrator:
+    return ChainedLoginRecoveryOrchestrator(
+        jdy_recovery=_build_jdy_orchestrator(_jdy_login_recovery_config_from_env(env), env, context),
+        wecom_recovery=_build_orchestrator(LoginRecoveryConfig.from_env(dict(env)), context),
+    )
+
+
+def _build_jdy_orchestrator(
+    config: LoginRecoveryConfig,
+    env: Mapping[str, str],
+    context: Dict[str, Any],
+) -> WecomLoginRecoveryOrchestrator:
+    bind_input = build_bind_input_from_context(context)
+
+    def preflight() -> Dict[str, Any]:
+        try:
+            clients = build_real_clients(
+                jdy_cookie_file=config.cookie_file,
+                wecom_cookie_file=str(context.get("wecom_cookie_file") or env.get("WECOM_ADMIN_COOKIE_FILE") or ""),
+            )
+        except CookieSourceError as exc:
+            detail = str(exc)
+            reason = "wecom_session_expired" if "WECOM_ADMIN_COOKIE" in detail or "wecom" in detail.lower() else "jdy_session_expired"
+            return {"status": "blocked", "reason": reason, "detail": detail}
+        return run_readonly_preflight(bind_input, **clients)
+
+    health_checker = LoginSessionHealthChecker(
+        JdyCookieFileReadonlyProbe(
+            cookie_file=Path(config.cookie_file),
+            filter_text=bind_input.plain_corp_id or bind_input.enterprise_short_name or bind_input.enterprise_name,
+        )
+    )
+    qr_provider = PlaywrightQrArtifactProvider(
+        profile_dir=Path(config.browser_profile_dir),
+        artifact_dir=Path(config.artifact_dir),
+        node_work_dir=Path(config.node_work_dir),
+        login_url=config.login_url,
+        qr_selector=config.qr_selector,
+        browser_channel=config.browser_channel,
+        keepalive_seconds=config.ttl_seconds,
+    )
+    notifier = GenericQrLoginNotifier(
+        WecomBotClient(config.qr_notify_webhook_url),
+        title="简道云管理后台登录",
+        status_text="简道云管理后台登录态失效，等待管理员扫码恢复",
+        mentioned_mobile_list=config.qr_notify_mention_mobiles,
+        notify_mode=config.qr_notify_mode,
+    )
+    session_refresher = WecomCookieSessionRefresher(
+        Path(config.cookie_file),
+        PlaywrightWecomCookieExporter(
+            profile_dir=Path(config.browser_profile_dir),
+            node_work_dir=Path(config.node_work_dir),
+            wecom_url=config.login_url,
+            browser_channel=config.browser_channel,
+        ),
+    )
+    return WecomLoginRecoveryOrchestrator(
+        config=config,
+        preflight=preflight,
+        health_checker=health_checker,
+        qr_provider=qr_provider,
+        notifier=notifier,
+        session_refresher=session_refresher,
+    )
+
+
+def _jdy_login_recovery_config_from_env(env: Mapping[str, str]) -> LoginRecoveryConfig:
+    return LoginRecoveryConfig(
+        enabled=_truthy_env(env, "JDY_LOGIN_RECOVERY_ENABLED", env.get("WECOM_LOGIN_RECOVERY_ENABLED", "false")),
+        qr_notify_enabled=_truthy_env(env, "JDY_QR_NOTIFY_ENABLED", env.get("WECOM_QR_NOTIFY_ENABLED", "false")),
+        qr_notify_webhook_url=str(env.get("JDY_QR_NOTIFY_WEBHOOK_URL") or env.get("WECOM_QR_NOTIFY_WEBHOOK_URL") or "").strip(),
+        qr_notify_mode=str(env.get("JDY_QR_NOTIFY_MODE") or env.get("WECOM_QR_NOTIFY_MODE") or "image").strip() or "image",
+        qr_notify_mention_mobiles=_split_csv(str(env.get("JDY_QR_NOTIFY_MENTION_MOBILES") or env.get("WECOM_QR_NOTIFY_MENTION_MOBILES") or "")),
+        ttl_seconds=_parse_int(env.get("JDY_QR_TTL_SECONDS") or env.get("WECOM_QR_TTL_SECONDS"), 120),
+        poll_interval_seconds=_parse_int(env.get("JDY_QR_POLL_INTERVAL_SECONDS") or env.get("WECOM_QR_POLL_INTERVAL_SECONDS"), 5),
+        max_notify_times=_parse_int(env.get("JDY_QR_MAX_NOTIFY_TIMES") or env.get("WECOM_QR_MAX_NOTIFY_TIMES"), 3),
+        artifact_dir=str(env.get("JDY_QR_ARTIFACT_DIR") or ".local/jdy-login-qr"),
+        cookie_file=str(env.get("JDY_ADMIN_COOKIE_FILE") or ".local/jdy-admin.cookie"),
+        browser_profile_dir=str(env.get("JDY_BROWSER_PROFILE_DIR") or ".local/jdy-admin-browser-profile"),
+        node_work_dir=str(env.get("JDY_LOGIN_RECOVERY_NODE_WORK_DIR") or ".local/playwright-jdy-login-recovery"),
+        login_url=str(env.get("JDY_LOGIN_URL") or "https://dc.jdydevelop.com"),
+        qr_selector=str(env.get("JDY_QR_SELECTOR") or env.get("WECOM_QR_SELECTOR") or "canvas, img[src*='qr'], img[src*='qrcode'], img[src*='login'], [class*='qr'] canvas, [class*='qr'] img, [class*='qrcode'] img, [class*='login'] img"),
+        browser_channel=str(env.get("JDY_BROWSER_CHANNEL") or env.get("WECOM_BROWSER_CHANNEL") or "chrome"),
+        trigger_reason="jdy_session_expired",
+        login_not_restored_reason="jdy_login_not_restored",
+        retry_action="retry_jdy_login_qr",
+    )
+
+
+def _truthy_env(env: Mapping[str, str], key: str, default: str) -> bool:
+    return str(env.get(key, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _split_csv(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _missing_required_fields(context: Dict[str, Any]) -> list[str]:

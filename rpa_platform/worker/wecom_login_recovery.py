@@ -60,6 +60,9 @@ def classify_readonly_response(response: Any) -> LoginSessionCheckResult:
     if not isinstance(response, dict):
         return LoginSessionCheckResult(LoginSessionStatus.ERROR, "unexpected_response_type")
 
+    if response.get("code") == 1007 or "用户尚未登录" in str(response.get("error", "")):
+        return LoginSessionCheckResult(LoginSessionStatus.EXPIRED, "jdy_login_required", str(response.get("error", "")))
+
     status_code = response.get("status_code")
     if status_code in (401, 403):
         return LoginSessionCheckResult(LoginSessionStatus.EXPIRED, "http_forbidden")
@@ -87,6 +90,8 @@ def classify_readonly_response(response: Any) -> LoginSessionCheckResult:
         or "customized_app" in data
     ):
         return LoginSessionCheckResult(LoginSessionStatus.RESTORED, "readonly_api_ok")
+    if "corp_deploy_list" in response or "has_more" in response:
+        return LoginSessionCheckResult(LoginSessionStatus.RESTORED, "readonly_api_ok")
 
     return LoginSessionCheckResult(LoginSessionStatus.ERROR, "unexpected_json_shape")
 
@@ -108,6 +113,9 @@ class LoginRecoveryConfig:
     login_url: str = WECOM_LOGIN_URL
     qr_selector: str = DEFAULT_QR_SELECTOR
     browser_channel: str = "chrome"
+    trigger_reason: str = "wecom_session_expired"
+    login_not_restored_reason: str = "wecom_login_not_restored"
+    retry_action: str = "retry_wecom_login_qr"
 
     @classmethod
     def from_env(cls, env: Optional[Dict[str, str]] = None) -> "LoginRecoveryConfig":
@@ -399,6 +407,64 @@ class WecomCookieFileReadonlyProbe:
         return data
 
 
+class JdyCookieFileReadonlyProbe:
+    def __init__(
+        self,
+        cookie_file: Path,
+        filter_text: str,
+        base_url: str = "https://dc.jdydevelop.com",
+        timeout: int = 20,
+        request_json: Optional[Callable[[str, Dict[str, Any], Dict[str, str]], Dict[str, Any]]] = None,
+    ):
+        self.cookie_file = Path(cookie_file)
+        self.filter_text = filter_text
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.request_json = request_json or self._request_json
+
+    def __call__(self) -> Dict[str, Any]:
+        cookie = self._read_cookie()
+        if not cookie:
+            return {"status_code": 401, "body": "missing jdy cookie source"}
+        return self.request_json(
+            "/api/fx_sa/wxwork/get_corp_deploy_list",
+            {"filter": self.filter_text, "skip": 0, "limit": 1},
+            {
+                "content-type": "application/json",
+                "cookie": cookie,
+                "origin": self.base_url,
+                "referer": self.base_url + "/",
+            },
+        )
+
+    def _read_cookie(self) -> str:
+        if not self.cookie_file.exists():
+            return ""
+        return self.cookie_file.read_text(encoding="utf-8").strip()
+
+    def _request_json(self, path: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = request.Request(url=self.base_url + path, data=body, headers=headers, method="POST")
+        try:
+            with request.urlopen(req, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+        except error.HTTPError as exc:
+            try:
+                raw = exc.read().decode("utf-8")
+            except Exception:
+                raw = ""
+            return {"status_code": exc.code, "body": raw or "jdy readonly probe HTTP error"}
+        except Exception as exc:
+            return {"status_code": 0, "body": "jdy readonly probe failed: %s" % exc.__class__.__name__}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"status_code": 0, "body": raw[:200]}
+        if not isinstance(data, dict):
+            return {"status_code": 0, "body": "jdy readonly probe returned non-object JSON"}
+        return data
+
+
 class LoginRecoveryNotifier(Protocol):
     def notify_qr(self, *, task_id: str, qr_path: Path, expires_at: float, context: Dict[str, Any]) -> None:
         raise NotImplementedError
@@ -432,7 +498,7 @@ class WecomLoginRecoveryOrchestrator:
 
     def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         first = self.preflight()
-        if first.get("reason") != "wecom_session_expired":
+        if first.get("reason") != self.config.trigger_reason:
             return _map_preflight_result(first)
         if not self.config.enabled:
             return first
@@ -442,8 +508,8 @@ class WecomLoginRecoveryOrchestrator:
         if self.config.qr_notify_enabled and max_notify_times > 0 and notify_attempts_before >= max_notify_times:
             return {
                 "status": "login_recovery_notify_exhausted",
-                "reason": "wecom_login_not_restored",
-                "detail": "wecom login QR notify attempts exhausted",
+                "reason": self.config.login_not_restored_reason,
+                "detail": "%s QR notify attempts exhausted" % self.config.trigger_reason,
                 "manual_action": "manual_escalation_required",
                 "notify_attempts": notify_attempts_before,
                 "remaining_notify_attempts": 0,
@@ -486,7 +552,7 @@ class WecomLoginRecoveryOrchestrator:
 
             return {
                 "status": "waiting_login",
-                "reason": "wecom_login_not_restored",
+                "reason": self.config.login_not_restored_reason,
                 "detail": last_check.detail or last_check.reason,
                 "expires_at": expires_at,
                 "notify_attempts": notify_attempts,
@@ -495,6 +561,7 @@ class WecomLoginRecoveryOrchestrator:
                     qr_notify_enabled=self.config.qr_notify_enabled,
                     max_notify_times=max_notify_times,
                     notify_attempts=notify_attempts,
+                    retry_action=self.config.retry_action,
                 ),
                 "retry_after": expires_at,
             }
@@ -528,15 +595,65 @@ class WecomQrLoginNotifier:
             self.bot_client.send(build_image_payload(qr_path))
 
 
+class GenericQrLoginNotifier:
+    def __init__(
+        self,
+        bot_client: Any,
+        title: str,
+        status_text: str,
+        mentioned_mobile_list: Optional[List[str]] = None,
+        notify_mode: str = "image",
+    ):
+        self.bot_client = bot_client
+        self.title = title
+        self.status_text = status_text
+        self.mentioned_mobile_list = list(mentioned_mobile_list or [])
+        self.notify_mode = notify_mode
+
+    def notify_qr(self, *, task_id: str, qr_path: Path, expires_at: float, context: Dict[str, Any]) -> None:
+        self.bot_client.send(
+            build_qr_login_markdown_payload(
+                title=self.title,
+                status_text=self.status_text,
+                expires_at=expires_at,
+                context=context,
+            )
+        )
+        if self.mentioned_mobile_list:
+            self.bot_client.send(
+                build_text_payload(
+                    "请扫码恢复%s登录态，任务 %s。" % (self.title, task_id),
+                    mentioned_mobile_list=self.mentioned_mobile_list,
+                )
+            )
+        if self.notify_mode == "image":
+            self.bot_client.send(build_image_payload(qr_path))
+
+
 def build_wecom_qr_login_markdown_payload(*, expires_at: float, context: Dict[str, Any]) -> Dict[str, Any]:
+    return build_qr_login_markdown_payload(
+        title="企业微信服务商后台登录",
+        status_text="企微服务商后台登录态失效，等待管理员扫码恢复",
+        expires_at=expires_at,
+        context=context,
+    )
+
+
+def build_qr_login_markdown_payload(
+    *,
+    title: str,
+    status_text: str,
+    expires_at: float,
+    context: Dict[str, Any],
+) -> Dict[str, Any]:
     safe_context = _redact_notification_context(context)
     enterprise_name = str(safe_context.get("enterprise_name") or safe_context.get("企业客户名称") or "")
     lines = [
         "当前绑定任务客户：%s" % enterprise_name,
-        "状态：企微服务商后台登录态失效，等待管理员扫码恢复",
+        "状态：%s" % status_text,
         "过期时间：%s" % _format_beijing_time(expires_at),
     ]
-    return build_markdown_payload("企业微信服务商后台登录", lines)
+    return build_markdown_payload(title, lines)
 
 
 def _map_preflight_result(preflight: Dict[str, Any]) -> Dict[str, Any]:
@@ -593,11 +710,17 @@ def _notify_attempts_from_context(context: Dict[str, Any]) -> int:
     return 0
 
 
-def _next_login_recovery_action(*, qr_notify_enabled: bool, max_notify_times: int, notify_attempts: int) -> str:
+def _next_login_recovery_action(
+    *,
+    qr_notify_enabled: bool,
+    max_notify_times: int,
+    notify_attempts: int,
+    retry_action: str = "retry_wecom_login_qr",
+) -> str:
     if not qr_notify_enabled:
         return "manual_scan_on_windows"
     if max_notify_times > 0 and notify_attempts < max_notify_times:
-        return "retry_wecom_login_qr"
+        return retry_action
     return "manual_escalation_required"
 
 
