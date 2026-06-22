@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from rpa_platform.notifications.wecom_bot import WecomBotClient
-from rpa_platform.services.wecom_bind_service import JdyWecomBindInput
+from rpa_platform.services.wecom_bind_service import JdyWecomBindInput, RandomWecomSecretGenerator
 from rpa_platform.worker.wecom_bind_recovery_handler import WecomBindRecoveryTaskHandler
 from rpa_platform.worker.wecom_login_recovery import (
     LoginRecoveryConfig,
@@ -34,6 +34,51 @@ class RealWecomBindRecovery:
         return dict(orchestrator.run(task_id=task_id, context=context))
 
 
+class RealWecomBindUnattendedWriteRecovery:
+    def __init__(
+        self,
+        env: Optional[Mapping[str, str]] = None,
+        wait_seconds: int = 300,
+    ):
+        self.env = dict(env or {})
+        self.wait_seconds = wait_seconds
+
+    def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        missing = _missing_required_fields(context)
+        if missing:
+            return {
+                "mode": "unattended_write",
+                "status": "blocked",
+                "reason": "missing_required_bind_context",
+                "missing_fields": missing,
+            }
+
+        from rpa_platform.worker.wecom_bind_unattended_write import (
+            default_context_file,
+            default_lock_file,
+            run_unattended_wecom_bind_write,
+        )
+
+        clients = build_real_clients(
+            jdy_cookie_file=str(context.get("jdy_cookie_file") or self.env.get("JDY_ADMIN_COOKIE_FILE") or ""),
+            wecom_cookie_file=str(
+                context.get("wecom_cookie_file")
+                or self.env.get("WECOM_ADMIN_COOKIE_FILE")
+                or ""
+            ),
+        )
+        return run_unattended_wecom_bind_write(
+            task_id=task_id,
+            context=context,
+            jdy_client=clients["jdy_client"],
+            wecom_client=clients["wecom_client"],
+            secret_generator=RandomWecomSecretGenerator(),
+            context_file=default_context_file(task_id),
+            lock_file=default_lock_file(),
+            wait_seconds=self.wait_seconds,
+        )
+
+
 def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
     return JdyWecomBindInput(
         enterprise_name=str(context.get("enterprise_name") or context.get("企业客户名称") or "").strip(),
@@ -53,6 +98,13 @@ def build_wecom_bind_recovery_handler_from_env(
     config = LoginRecoveryConfig.from_env(dict(env) if env is not None else None)
     recovery = RealWecomBindRecovery(orchestrator_factory=lambda context: _build_orchestrator(config, context))
     return WecomBindRecoveryTaskHandler(recovery)
+
+
+def build_wecom_bind_unattended_write_handler_from_env(
+    env: Optional[Mapping[str, str]] = None,
+) -> WecomBindRecoveryTaskHandler:
+    wait_seconds = _parse_int((env or {}).get("RPA_WORKER_UNATTENDED_WRITE_WAIT_SECONDS"), 300)
+    return WecomBindRecoveryTaskHandler(RealWecomBindUnattendedWriteRecovery(env=env, wait_seconds=wait_seconds))
 
 
 def _build_orchestrator(config: LoginRecoveryConfig, context: Dict[str, Any]) -> WecomLoginRecoveryOrchestrator:

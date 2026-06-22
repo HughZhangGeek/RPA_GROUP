@@ -25,6 +25,9 @@ class WecomBindRecoveryTaskHandler:
             }
         ]
 
+        if safe_result.get("mode") == "unattended_write":
+            return _unattended_write_task_result(status, safe_result, progress)
+
         if status == "waiting_login":
             safe_result["manual_action"] = "scan_wecom_admin_qr"
             safe_result["queue_control"] = _pause_wecom_bind_queue_control()
@@ -98,6 +101,50 @@ def _redact_bind_payload(value: Dict[str, Any]) -> Dict[str, Any]:
     _mask_key(redacted, "plain_corp_id")
     _mask_key(redacted, "requested_user_id")
     return redacted
+
+
+def _unattended_write_task_result(
+    status: str,
+    safe_result: Dict[str, Any],
+    progress: list[Dict[str, Any]],
+) -> WorkerTaskResult:
+    if status == "blocked":
+        progress.append(
+            {
+                "status": "readonly_preflight_completed",
+                "message": "wecom bind readonly preflight completed",
+            }
+        )
+        return WorkerTaskResult(status="blocked", result=safe_result, progress=progress)
+
+    progress.append(
+        {
+            "status": "readonly_preflight_completed",
+            "message": "wecom bind readonly preflight completed",
+        }
+    )
+    progress.append(
+        {
+            "status": "real_write_started",
+            "message": "wecom bind unattended real write started",
+        }
+    )
+    if status in {"success", "already_completed"}:
+        progress.append(
+            {
+                "status": "real_write_completed",
+                "message": "wecom bind unattended real write completed",
+            }
+        )
+        return WorkerTaskResult(status="success", result=safe_result, progress=progress)
+
+    progress.append(
+        {
+            "status": "real_write_failed",
+            "message": "wecom bind unattended real write failed",
+        }
+    )
+    return WorkerTaskResult(status="failed", result=safe_result, progress=progress)
 
 
 def _mask_key(value: Any, key_name: str) -> None:

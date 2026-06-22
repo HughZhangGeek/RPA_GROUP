@@ -567,6 +567,96 @@ EVENT_HISTORY_STORED
 - 修改、导入、重启或部署旧线上 `RPA.py`。
 - 提交真实 webhook、Cookie、Token、QR 图片、截图、日志或数据库内容。
 
+### 6.3.5 企微绑定无人值守真实写入
+
+状态：2026-06-20 已完成本地 fake transport 单元测试覆盖；真实写入验证必须等待用户在当前线程明确确认新的目标企业后再执行。历史成功样本已完成，不得重复执行同一单。
+
+Windows worker 启动前必须加载本机环境：
+
+```powershell
+conda activate RPA_GROUP
+cd C:\rpa_work\RPA_GROUP
+. C:\rpa_work\RPA_GROUP\.local\rpa-worker-env.ps1
+```
+
+无人值守写入必须同时满足两个开关：
+
+```powershell
+$env:RPA_WORKER_SIMULATE="false"
+$env:RPA_WORKER_ALLOW_UNATTENDED_WRITE="true"
+```
+
+控制面下发 payload 必须显式表达本单允许写入，二选一即可：
+
+```json
+{
+  "task_type": "wecom_bind_service",
+  "unattended_write": true
+}
+```
+
+或：
+
+```json
+{
+  "task_type": "wecom_bind_service",
+  "confirm_write": true
+}
+```
+
+若 `RPA_WORKER_ALLOW_UNATTENDED_WRITE` 未开启，或 payload 未带 `unattended_write=true` / `confirm_write=true`，worker 继续停在只读预检结果：`ready_for_real_bind` / `manual_confirm_required` / `manual_action_required`，不写 JDY、不提交企微线上订单。
+
+无人值守写入事件顺序：
+
+```text
+task.accepted
+task.progress status=running
+task.progress status=readonly_preflight_started
+task.progress status=readonly_preflight_completed
+task.progress status=real_write_started
+task.progress status=real_write_completed 或 real_write_failed
+task.completed status=succeeded 或 failed
+```
+
+成功结果摘要包含：
+
+```text
+result.status=success
+result.wecom.auditorderid=<线上订单 ID>
+result.wecom.auditorder_status=5
+result.submit_result.status=success
+```
+
+结果和本机 verbose 输出必须保持脱敏，不得包含 token、encoding_aes_key、Cookie、Webhook、二维码、真实上下文 JSON 或本地日志正文。
+
+重复和并发保护：
+
+- worker 会使用 `.local/wecom-bind-write.lock` 防止多个真实写入并发执行。
+- worker 会读取 `.local/wecom-bind-real-write-{task_id}.json`；如果同一 task 上下文已有 `auditorder_status=5`，直接返回 `already_completed`，不再次写入。
+- 当前阶段按单 worker 规则运行同一能力；不要同时启动多个可处理 `wecom_bind_service` 真实写入的 worker。
+- 成功完成的 task 不得通过本地脚本、worker 重试或控制面重放再次执行真实写入。
+
+本地 fake transport 验证命令：
+
+```bash
+python -m pytest \
+  tests/test_platform_c360_task_handlers.py \
+  tests/test_platform_wecom_bind_unattended_write.py \
+  tests/test_platform_wecom_bind_recovery_handler.py \
+  tests/test_platform_wecom_bind_real_recovery.py
+```
+
+Windows 只读 + 写入 dry validation 命令（不会自动生成新任务；必须等用户确认新的目标企业后再让控制面派发真实写入 payload）：
+
+```powershell
+conda activate RPA_GROUP
+cd C:\rpa_work\RPA_GROUP
+. C:\rpa_work\RPA_GROUP\.local\rpa-worker-env.ps1
+$env:RPA_WORKER_SIMULATE="false"
+$env:RPA_WORKER_ALLOW_UNATTENDED_WRITE="true"
+python -m rpa_platform.worker.c360_worker --once --verbose
+```
+
 ### 6.4 断线恢复验证
 
 1. 下发一条 fake 任务。

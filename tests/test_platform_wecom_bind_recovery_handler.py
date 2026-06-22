@@ -181,6 +181,85 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await handler.handle({"task_id": "task-003", "task_type": "diagnostics", "payload": {}})
 
+    async def test_unattended_write_success_reports_write_progress_and_succeeded_result(self):
+        recovery = FakeRecovery(
+            {
+                "mode": "unattended_write",
+                "status": "success",
+                "preflight": {"status": "ok", "reason": "ready_for_confirm_write"},
+                "wecom": {"auditorderid": "au202606200001", "auditorder_status": 5},
+                "submit_result": {
+                    "status": "success",
+                    "context": {
+                        "wecom": {
+                            "auditorder_status": 5,
+                            "token": "token-secret",
+                            "encoding_aes_key": "aes-secret",
+                        }
+                    },
+                },
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-unattended-success",
+                "task_type": "wecom_bind_service",
+                "payload": {"enterprise_name": "上海测试客户", "plain_corp_id": "corp-id-placeholder"},
+            }
+        )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(
+            [item["status"] for item in result.progress],
+            [
+                "readonly_preflight_started",
+                "readonly_preflight_completed",
+                "real_write_started",
+                "real_write_completed",
+            ],
+        )
+        self.assertEqual(result.result["status"], "success")
+        self.assertEqual(result.result["wecom"]["auditorderid"], "au202606200001")
+        self.assertEqual(result.result["wecom"]["auditorder_status"], 5)
+        self.assertNotIn("token-secret", str(result))
+        self.assertNotIn("aes-secret", str(result))
+        self.assertNotIn("corp-id-placeholder", str(result))
+
+    async def test_unattended_write_failure_reports_write_failed_and_failed_status(self):
+        recovery = FakeRecovery(
+            {
+                "mode": "unattended_write",
+                "status": "failed",
+                "reason": "real_write_failed",
+                "detail": "WeCom admin API error",
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-unattended-failed",
+                "task_type": "wecom_bind_service",
+                "payload": {"enterprise_name": "上海测试客户", "plain_corp_id": "corp-id-placeholder"},
+            }
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(
+            [item["status"] for item in result.progress],
+            [
+                "readonly_preflight_started",
+                "readonly_preflight_completed",
+                "real_write_started",
+                "real_write_failed",
+            ],
+        )
+        self.assertEqual(result.result["status"], "failed")
+        self.assertEqual(result.result["reason"], "real_write_failed")
+        self.assertNotIn("corp-id-placeholder", str(result))
+
 
 if __name__ == "__main__":
     unittest.main()
