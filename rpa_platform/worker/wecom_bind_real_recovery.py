@@ -77,12 +77,12 @@ class RealWecomBindUnattendedWriteRecovery:
         )
 
         context_file = default_context_file(task_id)
-        has_pending_auditorder = _has_pending_auditorder_context_file(context_file)
+        has_recoverable_auditorder = _has_recoverable_auditorder_context_file(context_file)
         login_recovery = self._build_login_recovery(context)
         recoverable_preflight = dict(login_recovery.run(task_id=task_id, context=context))
         if (
             recoverable_preflight.get("status") not in {"ready_for_real_bind", "manual_confirm_required"}
-            and not has_pending_auditorder
+            and not has_recoverable_auditorder
         ):
             result = _coerce_business_unexecutable_result(dict(recoverable_preflight))
             result["mode"] = "unattended_write"
@@ -149,7 +149,7 @@ def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
     )
 
 
-def _has_pending_auditorder_context_file(path: Path) -> bool:
+def _has_recoverable_auditorder_context_file(path: Path) -> bool:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
@@ -160,11 +160,7 @@ def _has_pending_auditorder_context_file(path: Path) -> bool:
     auditorderid = str(wecom.get("auditorderid") or "").strip()
     if not auditorderid:
         return False
-    try:
-        auditorder_status = int(wecom.get("auditorder_status"))
-    except (TypeError, ValueError):
-        auditorder_status = None
-    return auditorder_status != 5
+    return True
 
 
 def build_wecom_bind_recovery_handler_from_env(
