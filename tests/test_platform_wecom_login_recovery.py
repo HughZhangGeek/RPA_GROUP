@@ -560,6 +560,14 @@ class LocalQrArtifactProviderTest(unittest.TestCase):
 
 
 class PlaywrightQrArtifactProviderTest(unittest.TestCase):
+    def test_default_qr_selector_includes_jdy_qrcode_containers(self):
+        from rpa_platform.worker.wecom_login_recovery import DEFAULT_QR_SELECTOR
+
+        self.assertIn("[id*='qrcode' i]", DEFAULT_QR_SELECTOR)
+        self.assertIn("[id*='qr' i]", DEFAULT_QR_SELECTOR)
+        self.assertIn("[class*='qrcode' i]", DEFAULT_QR_SELECTOR)
+        self.assertIn("[class*='qr' i]", DEFAULT_QR_SELECTOR)
+
     def test_captures_qr_to_local_artifact_with_persistent_profile(self):
         commands = []
 
@@ -641,6 +649,37 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
             provider.close()
             self.assertTrue(fake_process.terminated)
             self.assertEqual(list((root / "node").glob("*.mjs")), [])
+
+    def test_background_capture_failure_includes_process_output(self):
+        class FailedProcess:
+            returncode = 1
+
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, timeout=None):
+                return ("page stdout", "No visible JDY qrcode container")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            provider = PlaywrightQrArtifactProvider(
+                profile_dir=root / "profile",
+                artifact_dir=root / "qr",
+                node_work_dir=root / "node",
+                ensure_package=lambda node_work_dir: None,
+                start_process=lambda command, cwd: FailedProcess(),
+                keepalive_seconds=120,
+                wait_timeout_seconds=1,
+                sleep=lambda seconds: None,
+                now=lambda: 1002.0,
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                provider.capture()
+
+        message = str(ctx.exception)
+        self.assertIn("exit code 1", message)
+        self.assertIn("No visible JDY qrcode container", message)
 
     def test_qr_capture_script_falls_back_to_visible_iframes(self):
         from rpa_platform.worker.wecom_login_recovery import _node_qr_capture_script

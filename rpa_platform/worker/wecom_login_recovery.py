@@ -17,8 +17,9 @@ from rpa_platform.notifications.wecom_bot import build_image_payload, build_mark
 WECOM_BASE_URL = "https://open.work.weixin.qq.com"
 WECOM_LOGIN_URL = "https://open.work.weixin.qq.com/wwopen/developers/tools"
 DEFAULT_QR_SELECTOR = (
-    "canvas, img[src*='qr'], img[src*='qrcode'], img[src*='login'], "
-    "[class*='qr'] canvas, [class*='qr'] img, [class*='qrcode'] img, [class*='login'] img"
+    "[id*='qrcode' i], [id*='qr' i], [class*='qrcode' i], [class*='qr' i], "
+    "canvas, svg, img[src*='qr' i], img[src*='qrcode' i], img[src*='login' i], "
+    "[class*='login' i] canvas, [class*='login' i] img"
 )
 
 
@@ -218,9 +219,13 @@ class PlaywrightQrArtifactProvider:
                 str(self.keepalive_seconds),
             ]
             if self.keepalive_seconds > 0:
-                self.process = self.start_process(command, str(self.node_work_dir))
-                self._wait_for_artifact(output_path)
-                return output_path
+                try:
+                    self.process = self.start_process(command, str(self.node_work_dir))
+                    self._wait_for_artifact(output_path)
+                    return output_path
+                except Exception:
+                    self.close()
+                    raise
             completed = self.run_command(command, str(self.node_work_dir))
         finally:
             if self.keepalive_seconds <= 0:
@@ -230,7 +235,10 @@ class PlaywrightQrArtifactProvider:
                     pass
                 self.script_path = None
         if getattr(completed, "returncode", 1) != 0:
-            raise RuntimeError("WeCom login QR capture failed with exit code %s" % getattr(completed, "returncode", "unknown"))
+            raise RuntimeError(
+                "WeCom login QR capture failed with exit code %s%s"
+                % (getattr(completed, "returncode", "unknown"), _completed_output_summary(completed))
+            )
         if not output_path.exists() or output_path.stat().st_size <= 0:
             raise FileNotFoundError("WeCom login QR capture did not produce an image artifact")
         return output_path
@@ -259,7 +267,10 @@ class PlaywrightQrArtifactProvider:
                 return
             process = self.process
             if process is not None and getattr(process, "poll", lambda: None)() is not None:
-                break
+                raise RuntimeError(
+                    "WeCom login QR capture process exited with exit code %s%s"
+                    % (getattr(process, "returncode", "unknown"), _process_output_summary(process))
+                )
             self.sleep(0.25)
         raise FileNotFoundError("WeCom login QR capture did not produce an image artifact")
 
@@ -770,11 +781,34 @@ def _npm_install_command() -> List[str]:
 
 
 def _run_command(command: List[str], cwd: str) -> Any:
-    return subprocess.run(command, cwd=cwd, check=False, text=True)
+    return subprocess.run(command, cwd=cwd, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def _start_process(command: List[str], cwd: str) -> Any:
-    return subprocess.Popen(command, cwd=cwd)
+    return subprocess.Popen(command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def _completed_output_summary(completed: Any) -> str:
+    stdout = str(getattr(completed, "stdout", "") or "").strip()
+    stderr = str(getattr(completed, "stderr", "") or "").strip()
+    parts = []
+    if stdout:
+        parts.append("stdout=%s" % stdout[-1000:])
+    if stderr:
+        parts.append("stderr=%s" % stderr[-1000:])
+    return ": " + "; ".join(parts) if parts else ""
+
+
+def _process_output_summary(process: Any) -> str:
+    communicate = getattr(process, "communicate", None)
+    if communicate is None:
+        return ""
+    try:
+        stdout, stderr = communicate(timeout=1)
+    except Exception as exc:
+        return ": output unavailable: %s" % exc.__class__.__name__
+    completed = subprocess.CompletedProcess([], getattr(process, "returncode", None), stdout=stdout, stderr=stderr)
+    return _completed_output_summary(completed)
 
 
 def _write_temp_node_script(node_work_dir: Path, script: str) -> Path:
