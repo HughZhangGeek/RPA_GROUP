@@ -260,6 +260,38 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.result["reason"], "real_write_failed")
         self.assertNotIn("corp-id-placeholder", str(result))
 
+    async def test_unattended_write_waiting_login_requires_manual_action_without_write_progress(self):
+        recovery = FakeRecovery(
+            {
+                "mode": "unattended_write",
+                "status": "waiting_login",
+                "reason": "wecom_login_not_restored",
+                "expires_at": 1000.0,
+                "notify_attempts": 1,
+                "remaining_notify_attempts": 2,
+            }
+        )
+        handler = WecomBindRecoveryTaskHandler(recovery)
+
+        result = await handler.handle(
+            {
+                "task_id": "task-unattended-waiting-login",
+                "task_type": "wecom_bind_service",
+                "payload": {"enterprise_name": "上海测试客户", "plain_corp_id": "corp-id-placeholder"},
+            }
+        )
+
+        self.assertEqual(result.status, "manual_action_required")
+        self.assertEqual(
+            [item["status"] for item in result.progress],
+            [
+                "readonly_preflight_started",
+                "waiting_login",
+            ],
+        )
+        self.assertEqual(result.result["queue_control"]["action"], "pause")
+        self.assertNotIn("real_write_started", str(result.progress))
+
 
 if __name__ == "__main__":
     unittest.main()

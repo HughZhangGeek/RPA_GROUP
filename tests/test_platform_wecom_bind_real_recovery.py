@@ -63,6 +63,57 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(orchestrator.calls[0]["task_id"], "task-real-readonly")
         self.assertEqual(orchestrator.calls[0]["context"]["enterprise_name"], "zh_test_上海测试客户")
 
+    def test_unattended_write_recovery_runs_login_recovery_before_real_write(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindUnattendedWriteRecovery
+
+        events = []
+
+        class FakeLoginRecovery:
+            def run(self, task_id, context):
+                events.append("login_recovery")
+                return {
+                    "status": "ready_for_real_bind",
+                    "reason": "ready_for_confirm_write",
+                    "preflight": {"status": "ok", "reason": "ready_for_confirm_write"},
+                    "login_recovery": {"notify_attempts": 1, "restored": True},
+                }
+
+        def clients_builder(**_kwargs):
+            events.append("clients")
+            return {"jdy_client": object(), "wecom_client": object()}
+
+        def write_runner(**kwargs):
+            events.append("write")
+            preflight = kwargs["preflight_runner"](None, jdy_client=kwargs["jdy_client"], wecom_client=kwargs["wecom_client"])
+            return {
+                "mode": "unattended_write",
+                "status": "success",
+                "preflight": preflight["preflight"],
+                "login_recovery": kwargs["login_recovery"],
+            }
+
+        recovery = RealWecomBindUnattendedWriteRecovery(
+            env={},
+            login_recovery_factory=lambda _context: FakeLoginRecovery(),
+            clients_builder=clients_builder,
+            write_runner=write_runner,
+            wait_seconds=0,
+        )
+
+        result = recovery.run(
+            task_id="task-unattended-recovered",
+            context={
+                "enterprise_name": "zh_test_上海测试客户",
+                "plain_corp_id": "ww_test_corp",
+                "requested_user_id": "zh_test_user",
+            },
+        )
+
+        self.assertEqual(events, ["login_recovery", "clients", "write"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["preflight"]["status"], "ok")
+        self.assertEqual(result["login_recovery"]["notify_attempts"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

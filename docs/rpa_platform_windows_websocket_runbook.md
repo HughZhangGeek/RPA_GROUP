@@ -606,6 +606,22 @@ $env:RPA_WORKER_ALLOW_UNATTENDED_WRITE="true"
 
 若 `RPA_WORKER_ALLOW_UNATTENDED_WRITE` 未开启，或 payload 未带 `unattended_write=true` / `confirm_write=true`，worker 继续停在只读预检结果：`ready_for_real_bind` / `manual_confirm_required` / `manual_action_required`，不写 JDY、不提交企微线上订单。
 
+若无人值守写入已开启且只读预检遇到企微服务商后台未登录，worker 会在同一次任务中进入登录恢复编排：
+
+```text
+readonly preflight 返回 wecom_session_expired
+-> 截取企微服务商后台登录二维码
+-> 通过配置的企微机器人发送 QR 通知
+-> 在 TTL 内轮询 cookie/只读接口
+-> 管理员扫码后刷新 cookie
+-> 重跑 readonly preflight
+-> 达到 ready_for_real_bind / manual_confirm_required
+-> 重新读取最新 cookie 构造写入 client
+-> 继续真实写入并提交线上订单
+```
+
+如果 TTL 内未扫码恢复，任务返回 `waiting_login` / `manual_action_required`，并携带 `queue_control.action=pause`；不会进入 `real_write_started`，也不会写 JDY 或提交企微线上订单。控制面后续可带回 `notify_attempts` 重新派发同任务，剩余通知次数由 `WECOM_QR_MAX_NOTIFY_TIMES` 控制。
+
 无人值守写入事件顺序：
 
 ```text

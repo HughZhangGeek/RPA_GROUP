@@ -59,13 +59,9 @@ def run_unattended_wecom_bind_write(
                 "enterprise_name": bind_input.enterprise_name,
             }
 
-        if preflight.get("status") not in {"ok", "review"}:
-            return {
-                "mode": "unattended_write",
-                "status": "blocked",
-                "reason": "preflight_not_ok",
-                "preflight": redact_context(preflight),
-            }
+        write_preflight, preflight_metadata = _preflight_for_write(preflight)
+        if write_preflight is None:
+            return _blocked_preflight_result(preflight)
 
         if now is None:
             now = datetime.now()
@@ -88,7 +84,7 @@ def run_unattended_wecom_bind_write(
         submit_result = service.submit_online_order(start_result.context)
         start_result.context["wecom"]["auditorder_status"] = submit_result.context["wecom"]["auditorder_status"]
         _write_private_json(context_file, start_result.context)
-        return _success_result(preflight, context_file, start_result, submit_result)
+        return _success_result(write_preflight, context_file, start_result, submit_result, preflight_metadata)
     except Exception as exc:
         return {
             "mode": "unattended_write",
@@ -109,8 +105,14 @@ def default_lock_file() -> Path:
     return REPO_ROOT / ".local" / "wecom-bind-write.lock"
 
 
-def _success_result(preflight: Dict[str, Any], context_file: Path, start_result: Any, submit_result: Any) -> Dict[str, Any]:
-    return {
+def _success_result(
+    preflight: Dict[str, Any],
+    context_file: Path,
+    start_result: Any,
+    submit_result: Any,
+    preflight_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    result = {
         "mode": "unattended_write",
         "status": submit_result.status,
         "preflight": redact_context(preflight),
@@ -131,6 +133,45 @@ def _success_result(preflight: Dict[str, Any], context_file: Path, start_result:
             "context": redact_context(submit_result.context),
         },
     }
+    for key, value in (preflight_metadata or {}).items():
+        result[key] = redact_context(value)
+    return result
+
+
+def _preflight_for_write(preflight: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    status = preflight.get("status")
+    if status in {"ok", "review"}:
+        return preflight, {}
+    if status in {"ready_for_real_bind", "manual_confirm_required"} and isinstance(preflight.get("preflight"), dict):
+        metadata = {}
+        if "login_recovery" in preflight:
+            metadata["login_recovery"] = preflight["login_recovery"]
+        return dict(preflight["preflight"]), metadata
+    return None, {}
+
+
+def _blocked_preflight_result(preflight: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(preflight.get("status") or "blocked")
+    result = {
+        "mode": "unattended_write",
+        "status": status if status in {"waiting_login", "login_recovery_notify_exhausted"} else "blocked",
+        "reason": "preflight_not_ok",
+        "preflight": redact_context(preflight),
+    }
+    if preflight.get("reason"):
+        result["preflight_reason"] = preflight.get("reason")
+    for key in (
+        "detail",
+        "manual_action",
+        "expires_at",
+        "notify_attempts",
+        "remaining_notify_attempts",
+        "next_action",
+        "retry_after",
+    ):
+        if key in preflight:
+            result[key] = redact_context(preflight[key])
+    return result
 
 
 def _already_completed_result(existing: Dict[str, Any], context_file: Path) -> Dict[str, Any]:

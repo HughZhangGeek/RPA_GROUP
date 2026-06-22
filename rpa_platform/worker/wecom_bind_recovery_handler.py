@@ -108,6 +108,38 @@ def _unattended_write_task_result(
     safe_result: Dict[str, Any],
     progress: list[Dict[str, Any]],
 ) -> WorkerTaskResult:
+    if status == "waiting_login":
+        safe_result["manual_action"] = "scan_wecom_admin_qr"
+        safe_result["queue_control"] = _pause_wecom_bind_queue_control()
+        progress.append(
+            {
+                "status": "waiting_login",
+                "message": "wecom admin QR notification sent",
+                "queue_control": _pause_wecom_bind_queue_control(),
+                "expires_at": safe_result.get("expires_at"),
+                "notify_attempts": safe_result.get("notify_attempts"),
+                "remaining_notify_attempts": safe_result.get("remaining_notify_attempts"),
+                "next_action": safe_result.get("next_action"),
+                "retry_after": safe_result.get("retry_after"),
+            }
+        )
+        return WorkerTaskResult(status="manual_action_required", result=safe_result, progress=progress)
+
+    if status == "login_recovery_notify_exhausted":
+        safe_result["manual_action"] = "manual_escalation_required"
+        safe_result["queue_control"] = _pause_wecom_bind_queue_control()
+        progress.append(
+            {
+                "status": "login_recovery_notify_exhausted",
+                "message": "wecom admin QR notify attempts exhausted",
+                "queue_control": _pause_wecom_bind_queue_control(),
+                "notify_attempts": safe_result.get("notify_attempts"),
+                "remaining_notify_attempts": safe_result.get("remaining_notify_attempts"),
+                "next_action": safe_result.get("next_action"),
+            }
+        )
+        return WorkerTaskResult(status="manual_action_required", result=safe_result, progress=progress)
+
     if status == "blocked":
         progress.append(
             {

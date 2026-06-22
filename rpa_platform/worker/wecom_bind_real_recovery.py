@@ -39,9 +39,15 @@ class RealWecomBindUnattendedWriteRecovery:
         self,
         env: Optional[Mapping[str, str]] = None,
         wait_seconds: int = 300,
+        login_recovery_factory: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        clients_builder: Callable[..., Dict[str, Any]] = build_real_clients,
+        write_runner: Optional[Callable[..., Dict[str, Any]]] = None,
     ):
         self.env = dict(env or {})
         self.wait_seconds = wait_seconds
+        self.login_recovery_factory = login_recovery_factory
+        self.clients_builder = clients_builder
+        self.write_runner = write_runner
 
     def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         missing = _missing_required_fields(context)
@@ -59,24 +65,48 @@ class RealWecomBindUnattendedWriteRecovery:
             run_unattended_wecom_bind_write,
         )
 
-        clients = build_real_clients(
-            jdy_cookie_file=str(context.get("jdy_cookie_file") or self.env.get("JDY_ADMIN_COOKIE_FILE") or ""),
-            wecom_cookie_file=str(
-                context.get("wecom_cookie_file")
-                or self.env.get("WECOM_ADMIN_COOKIE_FILE")
-                or ""
-            ),
-        )
-        return run_unattended_wecom_bind_write(
+        login_recovery = self._build_login_recovery(context)
+        recoverable_preflight = dict(login_recovery.run(task_id=task_id, context=context))
+        if recoverable_preflight.get("status") not in {"ready_for_real_bind", "manual_confirm_required"}:
+            result = dict(recoverable_preflight)
+            result["mode"] = "unattended_write"
+            return result
+
+        try:
+            clients = self.clients_builder(
+                jdy_cookie_file=str(context.get("jdy_cookie_file") or self.env.get("JDY_ADMIN_COOKIE_FILE") or ""),
+                wecom_cookie_file=str(
+                    context.get("wecom_cookie_file")
+                    or self.env.get("WECOM_ADMIN_COOKIE_FILE")
+                    or ""
+                ),
+            )
+        except Exception as exc:
+            return {
+                "mode": "unattended_write",
+                "status": "blocked",
+                "reason": "missing_cookie_source",
+                "detail": str(exc),
+            }
+        runner = self.write_runner or run_unattended_wecom_bind_write
+        return runner(
             task_id=task_id,
             context=context,
             jdy_client=clients["jdy_client"],
             wecom_client=clients["wecom_client"],
             secret_generator=RandomWecomSecretGenerator(),
+            preflight_runner=lambda *_args, **_kwargs: recoverable_preflight,
+            login_recovery=recoverable_preflight.get("login_recovery", {}),
             context_file=default_context_file(task_id),
             lock_file=default_lock_file(),
             wait_seconds=self.wait_seconds,
         )
+
+    def _build_login_recovery(self, context: Dict[str, Any]) -> Any:
+        if self.login_recovery_factory is not None:
+            return self.login_recovery_factory(context)
+        config = LoginRecoveryConfig.from_env(self.env)
+        return _build_orchestrator(config, context)
 
 
 def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
