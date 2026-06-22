@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 
 class FakeOrchestrator:
@@ -113,6 +114,114 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["preflight"]["status"], "ok")
         self.assertEqual(result["login_recovery"]["notify_attempts"], 1)
+
+    def test_local_full_jdy_login_recovery_flow_continues_to_unattended_write(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindUnattendedWriteRecovery
+        from rpa_platform.worker.wecom_login_recovery import (
+            LoginRecoveryConfig,
+            LoginSessionHealthChecker,
+            WecomLoginRecoveryOrchestrator,
+        )
+
+        events = []
+        preflight_results = [
+            {"status": "blocked", "reason": "jdy_session_expired", "detail": "用户尚未登录"},
+            {"status": "ok", "reason": "ready_for_confirm_write"},
+        ]
+
+        class FakeQrProvider:
+            def capture(self):
+                events.append("qr_captured")
+                return Path("jdy-qr.png")
+
+            def close(self):
+                events.append("qr_closed")
+
+        class FakeNotifier:
+            def notify_qr(self, *, task_id, qr_path, expires_at, context):
+                events.append("qr_notified")
+
+        class FakeSessionRefresher:
+            def refresh(self):
+                events.append("cookie_refreshed")
+                return True
+
+        def preflight():
+            result = preflight_results.pop(0)
+            events.append("preflight_%s" % result["reason"])
+            return result
+
+        def health_probe():
+            events.append("health_restored")
+            return {"corp_deploy_list": []}
+
+        login_recovery = WecomLoginRecoveryOrchestrator(
+            config=LoginRecoveryConfig(
+                enabled=True,
+                qr_notify_enabled=True,
+                ttl_seconds=30,
+                poll_interval_seconds=1,
+                max_notify_times=1,
+                trigger_reason="jdy_session_expired",
+                login_not_restored_reason="jdy_login_not_restored",
+                retry_action="retry_jdy_login_qr",
+            ),
+            preflight=preflight,
+            health_checker=LoginSessionHealthChecker(health_probe),
+            qr_provider=FakeQrProvider(),
+            notifier=FakeNotifier(),
+            session_refresher=FakeSessionRefresher(),
+            sleep=lambda _seconds: None,
+            now=lambda: 1000.0,
+        )
+
+        def clients_builder(**_kwargs):
+            events.append("clients_built")
+            return {"jdy_client": object(), "wecom_client": object()}
+
+        def write_runner(**kwargs):
+            events.append("real_write_started")
+            preflight_result = kwargs["preflight_runner"]()
+            return {
+                "mode": "unattended_write",
+                "status": "success",
+                "preflight": preflight_result["preflight"],
+                "login_recovery": kwargs["login_recovery"],
+            }
+
+        recovery = RealWecomBindUnattendedWriteRecovery(
+            env={},
+            login_recovery_factory=lambda _context: login_recovery,
+            clients_builder=clients_builder,
+            write_runner=write_runner,
+            wait_seconds=0,
+        )
+
+        result = recovery.run(
+            task_id="task-local-full-recovery",
+            context={
+                "enterprise_name": "zh_test_上海测试客户",
+                "plain_corp_id": "ww_test_corp",
+                "requested_user_id": "zh_test_user",
+            },
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["preflight"]["status"], "ok")
+        self.assertEqual(
+            events,
+            [
+                "preflight_jdy_session_expired",
+                "qr_captured",
+                "qr_notified",
+                "cookie_refreshed",
+                "health_restored",
+                "preflight_ready_for_confirm_write",
+                "qr_closed",
+                "clients_built",
+                "real_write_started",
+            ],
+        )
 
     def test_chained_login_recovery_runs_wecom_after_jdy_restore_exposes_wecom_expired(self):
         from rpa_platform.worker.wecom_bind_real_recovery import ChainedLoginRecoveryOrchestrator

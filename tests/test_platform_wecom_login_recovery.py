@@ -6,6 +6,7 @@ import subprocess
 import sys
 from subprocess import CompletedProcess
 from pathlib import Path
+from unittest.mock import patch
 
 from rpa_platform.worker.wecom_login_recovery import (
     GenericQrLoginNotifier,
@@ -848,6 +849,64 @@ class WecomCookieSessionTest(unittest.TestCase):
             result = checker.check()
 
         self.assertEqual(result.status, LoginSessionStatus.EXPIRED)
+
+
+class PlaywrightSubprocessEncodingTest(unittest.TestCase):
+    def test_run_command_decodes_process_output_as_utf8_with_replacement(self):
+        from rpa_platform.worker import wecom_login_recovery as module
+
+        calls = []
+
+        def fake_run(command, cwd, check, text, stdout, stderr, encoding, errors):
+            calls.append(
+                {
+                    "command": command,
+                    "cwd": cwd,
+                    "check": check,
+                    "text": text,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "encoding": encoding,
+                    "errors": errors,
+                }
+            )
+            return CompletedProcess(command, 0, stdout="ok", stderr="")
+
+        with patch.object(module.subprocess, "run", fake_run):
+            module._run_command(["node", "capture.mjs"], "C:/rpa_work/RPA_GROUP/.local/node")
+
+        self.assertEqual(calls[0]["encoding"], "utf-8")
+        self.assertEqual(calls[0]["errors"], "replace")
+        self.assertTrue(calls[0]["text"])
+
+    def test_start_process_decodes_process_output_as_utf8_with_replacement(self):
+        from rpa_platform.worker import wecom_login_recovery as module
+
+        calls = []
+
+        class FakeProcess:
+            pass
+
+        def fake_popen(command, cwd, text, stdout, stderr, encoding, errors):
+            calls.append(
+                {
+                    "command": command,
+                    "cwd": cwd,
+                    "text": text,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "encoding": encoding,
+                    "errors": errors,
+                }
+            )
+            return FakeProcess()
+
+        with patch.object(module.subprocess, "Popen", fake_popen):
+            module._start_process(["node", "capture.mjs"], "C:/rpa_work/RPA_GROUP/.local/node")
+
+        self.assertEqual(calls[0]["encoding"], "utf-8")
+        self.assertEqual(calls[0]["errors"], "replace")
+        self.assertTrue(calls[0]["text"])
 
 
 if __name__ == "__main__":
