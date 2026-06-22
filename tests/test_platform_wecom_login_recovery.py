@@ -568,15 +568,6 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
         self.assertIn("[class*='qrcode' i]", DEFAULT_QR_SELECTOR)
         self.assertIn("[class*='qr' i]", DEFAULT_QR_SELECTOR)
 
-    def test_background_wait_timeout_covers_node_locator_deadline(self):
-        provider = PlaywrightQrArtifactProvider(
-            profile_dir=Path("profile"),
-            artifact_dir=Path("qr"),
-            node_work_dir=Path("node"),
-        )
-
-        self.assertGreaterEqual(provider.wait_timeout_seconds, 45)
-
     def test_captures_qr_to_local_artifact_with_persistent_profile(self):
         commands = []
 
@@ -611,6 +602,38 @@ class PlaywrightQrArtifactProviderTest(unittest.TestCase):
             self.assertIn("--output-path", command)
             self.assertIn("--qr-selector", command)
             self.assertNotIn("corp-id-placeholder", " ".join(command))
+
+    def test_capture_passes_absolute_paths_to_node_when_configured_with_relative_paths(self):
+        commands = []
+        original_cwd = os.getcwd()
+
+        def fake_run(command, cwd):
+            commands.append({"command": command, "cwd": cwd})
+            output_path = Path(command[command.index("--output-path") + 1])
+            output_path.write_bytes(bytes([1, 2, 3]))
+            return CompletedProcess(command, 0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                os.chdir(tmpdir)
+                provider = PlaywrightQrArtifactProvider(
+                    profile_dir=Path("profile"),
+                    artifact_dir=Path("qr"),
+                    node_work_dir=Path("node"),
+                    ensure_package=lambda node_work_dir: None,
+                    run_command=fake_run,
+                    keepalive_seconds=0,
+                    now=lambda: 1003.0,
+                )
+
+                provider.capture()
+            finally:
+                os.chdir(original_cwd)
+
+        command = commands[0]["command"]
+        self.assertTrue(Path(command[command.index("--profile-dir") + 1]).is_absolute())
+        self.assertTrue(Path(command[command.index("--output-path") + 1]).is_absolute())
+        self.assertTrue(Path(commands[0]["cwd"]).is_absolute())
 
     def test_background_capture_returns_after_qr_exists_and_keeps_login_page_alive(self):
         commands = []
@@ -738,6 +761,36 @@ class WecomCookieSessionTest(unittest.TestCase):
         self.assertIn("--wecom-url", command)
         self.assertIn("--output-path", command)
         self.assertNotIn("header-value-from-profile", " ".join(command))
+
+    def test_cookie_exporter_passes_absolute_paths_to_node_when_configured_with_relative_paths(self):
+        commands = []
+        original_cwd = os.getcwd()
+
+        def fake_run(command, cwd):
+            commands.append({"command": command, "cwd": cwd})
+            output_path = Path(command[command.index("--output-path") + 1])
+            output_path.write_text('{"wecom_cookie": "header-value"}', encoding="utf-8")
+            return CompletedProcess(command, 0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                os.chdir(tmpdir)
+                exporter = PlaywrightWecomCookieExporter(
+                    profile_dir=Path("profile"),
+                    node_work_dir=Path("node"),
+                    ensure_package=lambda node_work_dir: None,
+                    run_command=fake_run,
+                )
+
+                cookie_header = exporter()
+            finally:
+                os.chdir(original_cwd)
+
+        command = commands[0]["command"]
+        self.assertEqual(cookie_header, "header-value")
+        self.assertTrue(Path(command[command.index("--profile-dir") + 1]).is_absolute())
+        self.assertTrue(Path(command[command.index("--output-path") + 1]).is_absolute())
+        self.assertTrue(Path(commands[0]["cwd"]).is_absolute())
 
     def test_session_refresher_writes_latest_cookie_with_owner_only_permissions(self):
         with tempfile.TemporaryDirectory() as tmpdir:

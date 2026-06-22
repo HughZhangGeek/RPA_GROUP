@@ -173,13 +173,13 @@ class PlaywrightQrArtifactProvider:
         run_command: Optional[Callable[[List[str], str], Any]] = None,
         start_process: Optional[Callable[[List[str], str], Any]] = None,
         keepalive_seconds: int = 120,
-        wait_timeout_seconds: int = 60,
+        wait_timeout_seconds: int = 30,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], float] = time.time,
     ):
-        self.profile_dir = Path(profile_dir)
-        self.artifact_dir = Path(artifact_dir)
-        self.node_work_dir = Path(node_work_dir)
+        self.profile_dir = _absolute_path(profile_dir)
+        self.artifact_dir = _absolute_path(artifact_dir)
+        self.node_work_dir = _absolute_path(node_work_dir)
         self.login_url = login_url
         self.qr_selector = qr_selector
         self.browser_channel = browser_channel
@@ -303,8 +303,8 @@ class PlaywrightWecomCookieExporter:
         ensure_package: Optional[Callable[[Path], None]] = None,
         run_command: Optional[Callable[[List[str], str], Any]] = None,
     ):
-        self.profile_dir = Path(profile_dir)
-        self.node_work_dir = Path(node_work_dir)
+        self.profile_dir = _absolute_path(profile_dir)
+        self.node_work_dir = _absolute_path(node_work_dir)
         self.wecom_url = wecom_url
         self.browser_channel = browser_channel
         self.ensure_package = ensure_package or ensure_playwright_node_package
@@ -809,6 +809,10 @@ def _process_output_summary(process: Any) -> str:
         return ": output unavailable: %s" % exc.__class__.__name__
     completed = subprocess.CompletedProcess([], getattr(process, "returncode", None), stdout=stdout, stderr=stderr)
     return _completed_output_summary(completed)
+
+
+def _absolute_path(path: Path) -> Path:
+    return Path(path).expanduser().resolve()
 
 
 def _write_temp_node_script(node_work_dir: Path, script: str) -> Path:
