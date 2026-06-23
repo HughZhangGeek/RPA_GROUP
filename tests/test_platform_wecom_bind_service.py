@@ -193,6 +193,9 @@ class JdyWecomBindServiceTest(unittest.TestCase):
                 "corp_name": "上海测试客户",
                 "original_tenant_id": "old-user",
                 "requested_user_id": "user-1",
+                "effective_user_id": "user-1",
+                "effective_user_id_source": "incoming_userid",
+                "incoming_userid_empty": False,
                 "install_tenant_id": "user-1",
                 "install_owner_id": "user-1",
                 "bound_user_id": "user-1",
@@ -258,6 +261,40 @@ class JdyWecomBindServiceTest(unittest.TestCase):
         ][0]
         self.assertEqual(order_payload["auditorder"]["suiteid"], 1009479)
         self.assertEqual(order_payload["auditorder"]["corpappid"], "app-1")
+
+    def test_start_bind_uses_jdy_corp_default_userid_when_requested_userid_empty(self):
+        call_log = []
+        service, jdy_transport, _wecom_transport = make_service(call_log)
+
+        result = service.start_bind(
+            JdyWecomBindInput(
+                enterprise_name="上海测试客户",
+                plain_corp_id="ww001",
+                requested_user_id="",
+                suite_id=1,
+                suite_scenario="main",
+                wecom_suiteid=1009479,
+                suite_name="简道云",
+            ),
+            now=datetime(2026, 6, 16, 10, 0, 0),
+        )
+
+        owner_call = [
+            call
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/get_owner"
+        ][0]
+        install_call = [
+            call
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/install_corp_deploy"
+        ][0]
+        self.assertEqual(owner_call["payload"]["user_id"], "old-user")
+        self.assertEqual(install_call["payload"]["tenant_id"], "old-user")
+        self.assertEqual(result.context["jdy"]["requested_user_id"], "")
+        self.assertEqual(result.context["jdy"]["effective_user_id"], "old-user")
+        self.assertEqual(result.context["jdy"]["effective_user_id_source"], "jdy_corp_default_userid")
+        self.assertTrue(result.context["jdy"]["incoming_userid_empty"])
 
     def test_submit_online_uses_saved_audit_order(self):
         call_log = []

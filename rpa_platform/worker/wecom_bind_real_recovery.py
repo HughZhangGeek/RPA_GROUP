@@ -26,6 +26,7 @@ BUSINESS_UNEXECUTABLE_REASONS = {
     "missing_corp_id",
     "missing_userid",
     "missing_required_bind_context",
+    "jdy_default_userid_missing",
     "jdy_corp_not_unique_or_missing",
     "owner_cannot_bind_or_update_corp_secret",
     "wecom_app_not_unique_or_missing",
@@ -353,8 +354,6 @@ def _missing_required_fields(context: Dict[str, Any]) -> list[str]:
         missing.append("enterprise_name")
     if not bind_input.plain_corp_id:
         missing.append("corp_id")
-    if not bind_input.requested_user_id:
-        missing.append("userid")
     return missing
 
 

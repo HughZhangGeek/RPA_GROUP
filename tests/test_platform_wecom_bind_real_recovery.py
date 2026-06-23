@@ -72,6 +72,23 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertIn("corp_id", result["missing_fields"])
         self.assertEqual(orchestrator.calls, [])
 
+    def test_missing_userid_is_resolved_later_instead_of_blocked_at_recovery_entry(self):
+        from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
+
+        orchestrator = FakeOrchestrator()
+        recovery = RealWecomBindRecovery(orchestrator_factory=lambda _context: orchestrator)
+
+        result = recovery.run(
+            task_id="task-empty-userid",
+            context={
+                "enterprise_name": "zh_test_上海测试客户",
+                "corp_id": "ww_test_corp",
+            },
+        )
+
+        self.assertEqual(result["status"], "ready_for_real_bind")
+        self.assertEqual(orchestrator.calls[0]["task_id"], "task-empty-userid")
+
     def test_business_preflight_blocked_result_becomes_business_unexecutable(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
 

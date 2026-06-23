@@ -27,6 +27,7 @@ from rpa_platform.integrations.wecom_admin_client import (
 from rpa_platform.services.wecom_bind_service import (
     JdyWecomBindInput,
     JdyWecomBindService,
+    resolve_bind_user_id,
     resolve_wecom_app_for_bind,
     wecom_lookup_summary,
 )
@@ -174,6 +175,8 @@ def _start_bind_with_recoverable_context(
             bind_input.enterprise_short_name or bind_input.enterprise_name,
         )
     except JdyAdminError:
+        if not bind_input.requested_user_id.strip():
+            raise
         owner = jdy_client.check_wework_owner(
             bind_input.requested_user_id,
             suite_id=bind_input.suite_id,
@@ -182,11 +185,14 @@ def _start_bind_with_recoverable_context(
         corp = _recover_corp_from_owner_for_write(bind_input, owner)
         if corp is None:
             raise
+    bind_user = resolve_bind_user_id(bind_input, corp)
+    if not bind_user.user_id:
+        raise JdyAdminError("JDY corp default User_ID is empty")
     wecom_resolution = resolve_wecom_app_for_bind(wecom_client, bind_input, corp.name)
     app = wecom_resolution.app
     if owner is None:
         owner = jdy_client.check_wework_owner(
-            bind_input.requested_user_id,
+            bind_user.user_id,
             suite_id=bind_input.suite_id,
             suite_scenario=bind_input.suite_scenario,
         )
@@ -201,15 +207,15 @@ def _start_bind_with_recoverable_context(
             "token": owner.existing_token,
             "encoding_aes_key": owner.existing_encoding_aes_key,
         }
-        install_tenant_id = bind_input.requested_user_id
-        install_owner_id = bind_input.requested_user_id
+        install_tenant_id = bind_user.user_id
+        install_owner_id = bind_user.user_id
     else:
         secrets_payload = secret_generator.generate()
         install = jdy_client.install_corp_deploy(
             JdyInstallRequest(
                 corp_id=corp.corp_id,
                 corp_name=corp.name,
-                tenant_id=bind_input.requested_user_id,
+                tenant_id=bind_user.user_id,
                 token=secrets_payload["token"],
                 encoding_aes_key=secrets_payload["encoding_aes_key"],
                 suite_id=bind_input.suite_id,
@@ -227,6 +233,9 @@ def _start_bind_with_recoverable_context(
             "corp_name": corp.name,
             "original_tenant_id": corp.tenant_id,
             "requested_user_id": bind_input.requested_user_id,
+            "effective_user_id": bind_user.user_id,
+            "effective_user_id_source": bind_user.source,
+            "incoming_userid_empty": bind_user.incoming_userid_empty,
             "install_tenant_id": install_tenant_id,
             "install_owner_id": install_owner_id,
             "bound_user_id": install_owner_id,

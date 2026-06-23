@@ -64,6 +64,45 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
         self.assertNotIn("token-secret", json.dumps(result, ensure_ascii=False))
         self.assertNotIn("aes-secret", json.dumps(result, ensure_ascii=False))
 
+    def test_unattended_write_uses_jdy_corp_default_userid_when_context_userid_empty(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        context = dict(self._context())
+        context["requested_user_id"] = ""
+        jdy_client, wecom_client, jdy_transport, _wecom_transport = self._clients()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_unattended_wecom_bind_write(
+                task_id="task-empty-userid",
+                context=context,
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                context_file=Path(tmpdir) / "context.json",
+                lock_file=Path(tmpdir) / "write.lock",
+                now=datetime(2026, 6, 20, 12, 0, 0),
+                wait_seconds=0,
+            )
+
+        owner_call = [
+            call
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/get_owner"
+        ][0]
+        install_call = [
+            call
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/install_corp_deploy"
+        ][0]
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(owner_call["payload"]["user_id"], "old-user")
+        self.assertEqual(install_call["payload"]["tenant_id"], "old-user")
+        self.assertEqual(result["start_result"]["context"]["jdy"]["requested_user_id"], "")
+        self.assertEqual(result["start_result"]["context"]["jdy"]["effective_user_id"], "old-user")
+        self.assertEqual(
+            result["start_result"]["context"]["jdy"]["effective_user_id_source"],
+            "jdy_corp_default_userid",
+        )
+
     def test_private_form_success_result_contains_jdy_writeback_fields(self):
         from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
 

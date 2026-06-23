@@ -14,8 +14,10 @@ from rpa_platform.domain.redaction import mask_identifier
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient, JdyAdminError, JdyCorpDeploy
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomAdminError, WecomSessionExpiredError
 from rpa_platform.services.wecom_bind_service import (
+    BindUserResolution,
     JdyWecomBindInput,
     WecomAppCandidateLookupError,
+    resolve_bind_user_id,
     resolve_wecom_app_for_bind,
     wecom_lookup_error_summary,
     wecom_lookup_summary,
@@ -116,6 +118,8 @@ def run_readonly_preflight(
     except (JdyAdminError, JsonHttpError) as exc:
         if _is_jdy_session_expired_error(exc):
             return _failure_summary(bind_input, "jdy_session_expired", exc)
+        if not bind_input.requested_user_id.strip():
+            return _failure_summary(bind_input, "jdy_corp_not_unique_or_missing", exc)
         try:
             owner = jdy_client.check_wework_owner(
                 bind_input.requested_user_id,
@@ -131,11 +135,23 @@ def run_readonly_preflight(
             return _failure_summary(bind_input, "jdy_corp_not_unique_or_missing", exc)
 
     corp_name_mismatch = corp.name not in acceptable_names
+    bind_user = resolve_bind_user_id(bind_input, corp)
+    if not bind_user.user_id:
+        return _summary(
+            bind_input=bind_input,
+            corp=corp,
+            app=None,
+            status="blocked",
+            reason="jdy_default_userid_missing",
+            owner_state="not_checked",
+            corp_name_mismatch=corp_name_mismatch,
+            bind_user=bind_user,
+        )
 
     if owner is None:
         try:
             owner = jdy_client.check_wework_owner(
-                bind_input.requested_user_id,
+                bind_user.user_id,
                 suite_id=bind_input.suite_id,
                 suite_scenario=bind_input.suite_scenario,
             )
@@ -153,6 +169,7 @@ def run_readonly_preflight(
             status="blocked",
             reason="owner_cannot_bind_or_update_corp_secret",
             owner_state=owner_state,
+            bind_user=bind_user,
         )
 
     try:
@@ -176,6 +193,7 @@ def run_readonly_preflight(
             owner_state=owner_state,
             corp_name_mismatch=corp_name_mismatch,
             wecom_lookup=wecom_lookup_error_summary(exc),
+            bind_user=bind_user,
         )
     except (WecomAdminError, JsonHttpError) as exc:
         return _failure_summary(
@@ -208,6 +226,7 @@ def run_readonly_preflight(
         owner_state=owner_state,
         corp_name_mismatch=corp_name_mismatch,
         wecom_lookup=wecom_lookup_summary(wecom_resolution),
+        bind_user=bind_user,
     )
 
 
@@ -381,8 +400,14 @@ def _summary(
     owner_state: str,
     corp_name_mismatch: bool = False,
     wecom_lookup: Optional[Dict[str, Any]] = None,
+    bind_user: Optional[BindUserResolution] = None,
 ) -> Dict[str, Any]:
     wecom_lookup = wecom_lookup or {}
+    effective_user_id = bind_user.user_id if bind_user is not None else bind_input.requested_user_id
+    effective_user_id_source = bind_user.source if bind_user is not None else "incoming_userid"
+    incoming_userid_empty = (
+        bind_user.incoming_userid_empty if bind_user is not None else not bool(bind_input.requested_user_id.strip())
+    )
     return {
         "status": status,
         "reason": reason,
@@ -394,6 +419,9 @@ def _summary(
             "corp_name": corp.name,
             "original_tenant_id": corp.tenant_id,
             "requested_user_id": bind_input.requested_user_id,
+            "effective_user_id": effective_user_id,
+            "effective_user_id_source": effective_user_id_source,
+            "incoming_userid_empty": incoming_userid_empty,
             "suite_id": corp.suite_id,
             "suite_scenario": corp.suite_scenario,
             "suite_name": corp.suite_name,

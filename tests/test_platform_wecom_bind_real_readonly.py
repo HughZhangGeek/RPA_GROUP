@@ -134,6 +134,39 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
             ["/wwopen/developer/customApp/tpl/app/list"],
         )
 
+    def test_readonly_preflight_uses_jdy_corp_default_userid_when_incoming_userid_empty(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        jdy_transport = RecordingJdyTransport()
+        wecom_transport = RecordingWecomTransport()
+
+        result = run_readonly_preflight(
+            JdyWecomBindInput(
+                enterprise_name="上海测试客户",
+                plain_corp_id="ww-plain-secret",
+                requested_user_id="",
+                suite_id=1,
+                suite_scenario="main",
+                wecom_suiteid=1009479,
+                suite_name="简道云",
+            ),
+            jdy_client=JdyAdminClient(jdy_transport),
+            wecom_client=WecomAdminClient(wecom_transport),
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["reason"], "ready_for_confirm_write")
+        self.assertEqual(result["jdy"]["requested_user_id"], "")
+        self.assertEqual(result["jdy"]["effective_user_id"], "old-user")
+        self.assertEqual(result["jdy"]["effective_user_id_source"], "jdy_corp_default_userid")
+        self.assertTrue(result["jdy"]["incoming_userid_empty"])
+        owner_call = [
+            call
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/get_owner"
+        ][0]
+        self.assertEqual(owner_call["payload"]["user_id"], "old-user")
+
     def test_readonly_preflight_accepts_jdy_full_name_and_short_name_pair(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
 

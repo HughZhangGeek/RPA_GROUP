@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from rpa_platform.integrations.jdy_admin_client import (
     JdyAdminClient,
+    JdyCorpDeploy,
     JdyAdminError,
     JdyInstallRequest,
     OwnerCannotBindError,
@@ -64,6 +65,13 @@ class JdyWecomBindResult:
 
 
 @dataclass(frozen=True)
+class BindUserResolution:
+    user_id: str
+    source: str
+    incoming_userid_empty: bool
+
+
+@dataclass(frozen=True)
 class WecomLookupCandidate:
     source: str
     name: str
@@ -110,6 +118,28 @@ def build_wecom_lookup_candidates(
         seen.add(clean_name)
         candidates.append(WecomLookupCandidate(source=source, name=clean_name))
     return candidates
+
+
+def resolve_bind_user_id(request: JdyWecomBindInput, corp: JdyCorpDeploy) -> BindUserResolution:
+    incoming_user_id = request.requested_user_id.strip()
+    if incoming_user_id:
+        return BindUserResolution(
+            user_id=incoming_user_id,
+            source="incoming_userid",
+            incoming_userid_empty=False,
+        )
+    default_user_id = corp.tenant_id.strip()
+    if default_user_id:
+        return BindUserResolution(
+            user_id=default_user_id,
+            source="jdy_corp_default_userid",
+            incoming_userid_empty=True,
+        )
+    return BindUserResolution(
+        user_id="",
+        source="jdy_corp_default_userid_missing",
+        incoming_userid_empty=True,
+    )
 
 
 def resolve_wecom_app_for_bind(
@@ -215,6 +245,9 @@ class JdyWecomBindService:
             request.plain_corp_id,
             request.enterprise_short_name or request.enterprise_name,
         )
+        bind_user = resolve_bind_user_id(request, corp)
+        if not bind_user.user_id:
+            raise JdyAdminError("JDY corp default User_ID is empty")
         wecom_resolution = resolve_wecom_app_for_bind(self.wecom_client, request, corp.name)
         app = wecom_resolution.app
         secrets_payload = self.secret_generator.generate()
@@ -223,7 +256,7 @@ class JdyWecomBindService:
         redirect_domain = "wxwork.jiandaoyun.com"
 
         owner = self.jdy_client.check_wework_owner(
-            request.requested_user_id,
+            bind_user.user_id,
             suite_id=request.suite_id,
             suite_scenario=request.suite_scenario,
         )
@@ -234,7 +267,7 @@ class JdyWecomBindService:
             JdyInstallRequest(
                 corp_id=corp.corp_id,
                 corp_name=corp.name,
-                tenant_id=request.requested_user_id,
+                tenant_id=bind_user.user_id,
                 token=secrets_payload["token"],
                 encoding_aes_key=secrets_payload["encoding_aes_key"],
                 suite_id=request.suite_id,
@@ -274,6 +307,9 @@ class JdyWecomBindService:
                 "corp_name": corp.name,
                 "original_tenant_id": corp.tenant_id,
                 "requested_user_id": request.requested_user_id,
+                "effective_user_id": bind_user.user_id,
+                "effective_user_id_source": bind_user.source,
+                "incoming_userid_empty": bind_user.incoming_userid_empty,
                 "install_tenant_id": install_tenant_id,
                 "install_owner_id": install_owner_id,
                 "bound_user_id": bound_user_id,
