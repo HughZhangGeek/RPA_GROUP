@@ -184,9 +184,6 @@ def run_readonly_preflight(
     elif owner_state == "can_update_corp_secret":
         reason = "owner_already_bound_can_update_corp_secret"
         status = "review"
-    elif corp_name_mismatch:
-        reason = "jdy_corp_name_mismatch"
-        status = "review"
     else:
         reason = "ready_for_confirm_write"
         status = "ok"

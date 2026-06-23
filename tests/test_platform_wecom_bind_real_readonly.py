@@ -164,7 +164,7 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["wecom"]["authcorp_name"], "南京示例集团")
         self.assertEqual(wecom_transport.calls[0]["params"]["corp_name_keyword"], "南京示例集团")
 
-    def test_readonly_preflight_allows_unique_corp_id_name_mismatch_as_review(self):
+    def test_readonly_preflight_allows_unique_corp_id_name_mismatch_without_manual_confirm(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
 
         class MismatchedNameJdyTransport(RecordingJdyTransport):
@@ -181,6 +181,8 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
                     response["data"]["corpapp"][0]["authcorp_name"] = "凯棠管理"
                 return response
 
+        wecom_transport = MismatchedNameWecomTransport()
+
         result = run_readonly_preflight(
             JdyWecomBindInput(
                 enterprise_name="江苏凯棠工程项目管理有限公司",
@@ -193,14 +195,15 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
                 suite_name="简道云",
             ),
             jdy_client=JdyAdminClient(MismatchedNameJdyTransport()),
-            wecom_client=WecomAdminClient(MismatchedNameWecomTransport()),
+            wecom_client=WecomAdminClient(wecom_transport),
         )
 
-        self.assertEqual(result["status"], "review")
-        self.assertEqual(result["reason"], "jdy_corp_name_mismatch")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["reason"], "ready_for_confirm_write")
         self.assertEqual(result["jdy"]["corp_name"], "凯棠管理")
         self.assertEqual(result["jdy"]["owner_state"], "can_bind_corp_secret")
         self.assertEqual(result["wecom"]["authcorp_name"], "凯棠管理")
+        self.assertEqual(wecom_transport.calls[0]["params"]["corp_name_keyword"], "凯棠管理")
 
     def test_readonly_preflight_reports_explainable_already_bound_owner_state(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
