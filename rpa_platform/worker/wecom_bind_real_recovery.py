@@ -345,8 +345,6 @@ def _missing_required_fields(context: Dict[str, Any]) -> list[str]:
     missing = []
     if not bind_input.enterprise_name and not bind_input.plain_corp_id:
         missing.append("enterprise_identity")
-    if not bind_input.requested_user_id:
-        missing.append("userid")
     return missing
 
 
@@ -391,6 +389,7 @@ def _first_text(context: Mapping[str, Any], *keys: str) -> str:
 
 
 def _with_default_userid(context: Dict[str, Any], env: Mapping[str, str]) -> Dict[str, Any]:
+    del env
     result = dict(context)
     explicit_userid = _first_text(result, "requested_user_id", "userid", "user_id", "User_ID")
     if explicit_userid:
@@ -399,11 +398,9 @@ def _with_default_userid(context: Dict[str, Any], env: Mapping[str, str]) -> Dic
         result.setdefault("userid_source", "payload")
         return result
 
-    default_userid = str(env.get("RPA_DEFAULT_BIND_USERID") or "").strip()
-    if default_userid:
-        result["requested_user_id"] = default_userid
-        result["userid"] = default_userid
-        result["userid_source"] = "default"
+    result["requested_user_id"] = ""
+    result["userid"] = ""
+    result["userid_source"] = "default"
     return result
 
 

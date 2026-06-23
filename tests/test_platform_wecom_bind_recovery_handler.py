@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import patch
 
 from rpa_platform.worker.c360_worker_runtime import WorkerTaskResult
 from rpa_platform.worker.wecom_bind_recovery_handler import WecomBindRecoveryTaskHandler
@@ -16,7 +15,7 @@ class FakeRecovery:
 
 
 class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
-    def test_real_recovery_uses_default_userid_when_payload_userid_is_missing(self):
+    def test_real_recovery_marks_default_userid_source_without_filling_userid(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
 
         class RecordingRecovery:
@@ -28,10 +27,7 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
                 return {"status": "ready_for_real_bind", "reason": "ready_for_confirm_write"}
 
         recovery = RecordingRecovery()
-        real_recovery = RealWecomBindRecovery(
-            orchestrator_factory=lambda context: recovery,
-            env={"RPA_DEFAULT_BIND_USERID": "default-user-1"},
-        )
+        real_recovery = RealWecomBindRecovery(orchestrator_factory=lambda context: recovery)
 
         result = real_recovery.run(
             task_id="task-default-userid",
@@ -44,10 +40,11 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "ready_for_real_bind")
         self.assertEqual(result["userid_source"], "default")
-        self.assertEqual(recovery.calls[0]["context"]["requested_user_id"], "default-user-1")
+        self.assertEqual(recovery.calls[0]["context"].get("requested_user_id", ""), "")
+        self.assertEqual(recovery.calls[0]["context"].get("userid", ""), "")
         self.assertEqual(recovery.calls[0]["context"]["userid_source"], "default")
 
-    def test_real_recovery_uses_process_env_default_userid_when_env_is_not_injected(self):
+    def test_real_recovery_allows_missing_userid_to_continue_to_jdy_default(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
 
         class RecordingRecovery:
@@ -59,32 +56,15 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
                 return {"status": "ready_for_real_bind", "reason": "ready_for_confirm_write"}
 
         recovery = RecordingRecovery()
-        with patch.dict("os.environ", {"RPA_DEFAULT_BIND_USERID": "env-default-user-1"}):
-            real_recovery = RealWecomBindRecovery(orchestrator_factory=lambda context: recovery)
-            result = real_recovery.run(
-                task_id="task-env-default-userid",
-                context={"enterprise_name": "上海测试客户", "corp_id": "ww001"},
-            )
-
-        self.assertEqual(result["userid_source"], "default")
-        self.assertEqual(recovery.calls[0]["context"]["requested_user_id"], "env-default-user-1")
-
-    def test_real_recovery_reports_chinese_error_when_default_userid_is_unconfigured(self):
-        from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
-
-        real_recovery = RealWecomBindRecovery(
-            orchestrator_factory=lambda _context: FakeRecovery({"status": "ok"}),
-            env={},
-        )
-
+        real_recovery = RealWecomBindRecovery(orchestrator_factory=lambda context: recovery)
         result = real_recovery.run(
-            task_id="task-missing-default-userid",
+            task_id="task-missing-userid",
             context={"enterprise_name": "上海测试客户", "corp_id": "ww001"},
         )
 
-        self.assertEqual(result["status"], "business_unexecutable")
-        self.assertEqual(result["reason"], "missing_userid")
-        self.assertEqual(result["error_msg"], "未配置默认绑定用户，请联系管理员配置默认 UserID")
+        self.assertEqual(result["status"], "ready_for_real_bind")
+        self.assertEqual(result["userid_source"], "default")
+        self.assertEqual(recovery.calls[0]["context"]["userid_source"], "default")
 
     async def test_waiting_login_result_becomes_manual_action_required_progress(self):
         recovery = FakeRecovery(
