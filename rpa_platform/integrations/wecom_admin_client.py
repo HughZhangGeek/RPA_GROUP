@@ -73,7 +73,7 @@ class WecomOnlineOrder:
 
 
 class WecomAdminClient:
-    TARGET_PRIVILEGE_IDS = {310000, 310001, 310002, 310100, 10006, 10010}
+    TARGET_PRIVILEGE_IDS = {10006, 10010}
 
     def __init__(self, transport: WecomAdminTransport):
         self.transport = transport
@@ -268,8 +268,11 @@ class WecomAdminClient:
 
     @staticmethod
     def _privilege_id(value: Dict[str, Any]) -> int:
+        raw = value.get("id")
+        if raw is None:
+            raw = value.get("val")
         try:
-            return int(value.get("id") or 0)
+            return int(raw or 0)
         except (TypeError, ValueError):
             return 0
 
@@ -313,6 +316,11 @@ class WecomAdminClient:
     @staticmethod
     def _extract_required_privilege_list(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         WecomAdminClient._raise_api_error_if_present(data)
+        nested = data.get("data")
+        if isinstance(nested, dict):
+            value = nested.get("new_privilege_list")
+            if isinstance(value, list) and value:
+                return value
         value = WecomAdminClient._extract_privilege_list(data)
         if value:
             return value

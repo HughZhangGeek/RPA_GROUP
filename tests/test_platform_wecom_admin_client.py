@@ -55,6 +55,19 @@ def make_app(raw=None):
     )
 
 
+def _collect_b_check_by_val(value):
+    result = {}
+    if isinstance(value, dict):
+        if "val" in value:
+            result[int(value["val"])] = value.get("b_check")
+        for child in value.values():
+            result.update(_collect_b_check_by_val(child))
+    elif isinstance(value, list):
+        for item in value:
+            result.update(_collect_b_check_by_val(item))
+    return result
+
+
 class WecomAdminClientTest(unittest.TestCase):
     def test_resolve_unique_custom_app_uses_runbook_corpapp_response(self):
         transport = FakeTransport(
@@ -307,7 +320,7 @@ class WecomAdminClientTest(unittest.TestCase):
                         ]
                     }
                 },
-                {"data": {"privilege_list": [{"id": 310000, "b_check": True}]}},
+                {"data": {"privilege_list": [{"id": 10006, "b_check": True}]}},
             ]
         )
         client = WecomAdminClient(transport)
@@ -335,11 +348,13 @@ class WecomAdminClientTest(unittest.TestCase):
         self.assertNotIn("corpappid", set_call["payload"])
         self.assertNotIn("privileges", set_call["payload"])
         privileges = set_call["payload"]["privilege_list"]
-        target_ids = {310000, 310001, 310002, 310100, 10006, 10010}
+        target_ids = {10006, 10010}
+        org_ids = {310000, 310001, 310002, 310100}
         self.assertTrue(all(item["b_check"] for item in privileges if item["id"] in target_ids))
+        self.assertFalse(any(item["b_check"] for item in privileges if item["id"] in org_ids))
         self.assertFalse([item for item in privileges if item["id"] == 42][0]["b_check"])
         self.assertEqual([item for item in privileges if item["id"] == 310000][0]["keep"], "a")
-        self.assertEqual(result, [{"id": 310000, "b_check": True}])
+        self.assertEqual(result, [{"id": 10006, "b_check": True}])
 
     def test_set_target_privileges_recursively_checks_nested_member_basic_info(self):
         transport = FakeTransport(
@@ -372,8 +387,85 @@ class WecomAdminClientTest(unittest.TestCase):
         nested_by_id = {item["id"]: item for item in member_basic["children"]}
         self.assertTrue(nested_by_id[10006]["b_check"])
         self.assertTrue(nested_by_id[10010]["b_check"])
-        self.assertTrue([item for item in privileges if item["id"] == 310000][0]["b_check"])
+        self.assertFalse([item for item in privileges if item["id"] == 310000][0]["b_check"])
         self.assertEqual(result, privileges)
+
+    def test_set_target_privileges_uses_new_privilege_list_and_real_val_tree(self):
+        transport = FakeTransport(
+            [
+                {
+                    "data": {
+                        "privilege_list": [
+                            {
+                                "app_privilege": [
+                                    {
+                                        "val": 21,
+                                        "b_check": True,
+                                        "sub_app_privilege": [
+                                            {
+                                                "val": 3100,
+                                                "b_check": True,
+                                                "sub_app_privilege": [
+                                                    {"val": 310000, "b_check": True, "sub_app_privilege": []},
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                ],
+                            }
+                        ],
+                        "new_privilege_list": [
+                            {
+                                "app_privilege": [
+                                    {
+                                        "val": 21,
+                                        "b_check": False,
+                                        "sub_app_privilege": [
+                                            {
+                                                "val": 3100,
+                                                "b_check": False,
+                                                "sub_app_privilege": [
+                                                    {"val": 310000, "b_check": False, "sub_app_privilege": []},
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "val": 19,
+                                        "b_check": True,
+                                        "sub_app_privilege": [
+                                            {
+                                                "val": 1009,
+                                                "b_check": True,
+                                                "sub_app_privilege": [
+                                                    {"val": 10006, "b_check": False, "sub_app_privilege": []},
+                                                    {"val": 10010, "b_check": False, "sub_app_privilege": []},
+                                                    {"val": 10020, "b_check": False, "sub_app_privilege": []},
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                ],
+                                "app_id": "5629501504772332",
+                            }
+                        ],
+                    }
+                },
+                {"data": {}},
+            ]
+        )
+        client = WecomAdminClient(transport)
+
+        result = client.set_target_privileges(suiteid=1009479, app_id="5629501504772332")
+
+        payload = transport.calls[1]["payload"]
+        tree = payload["privilege_list"][0]["app_privilege"]
+        by_val = _collect_b_check_by_val(tree)
+        self.assertFalse(by_val[310000])
+        self.assertTrue(by_val[10006])
+        self.assertTrue(by_val[10010])
+        self.assertFalse(by_val[10020])
+        self.assertEqual(result, payload["privilege_list"])
 
     def test_set_trial_rule_uses_nested_try_rule_info(self):
         transport = FakeTransport(
@@ -494,7 +586,14 @@ class WecomAdminClientTest(unittest.TestCase):
     def test_target_privilege_write_accepts_empty_success_response(self):
         transport = FakeTransport(
             [
-                {"data": {"privilege_list": [{"id": 310000, "b_check": False}]}},
+                {
+                    "data": {
+                        "privilege_list": [
+                            {"id": 310000, "b_check": False},
+                            {"id": 10006, "b_check": False},
+                        ]
+                    }
+                },
                 {"data": {}},
             ]
         )
@@ -502,7 +601,7 @@ class WecomAdminClientTest(unittest.TestCase):
 
         result = client.set_target_privileges(suiteid=1, app_id="app-1")
 
-        self.assertEqual(result, [{"id": 310000, "b_check": True}])
+        self.assertEqual(result, [{"id": 310000, "b_check": False}, {"id": 10006, "b_check": True}])
 
     def test_target_privilege_read_rejects_missing_privilege_list_without_writing(self):
         transport = FakeTransport([{"data": {}}])
