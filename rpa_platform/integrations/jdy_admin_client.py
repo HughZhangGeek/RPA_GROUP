@@ -107,10 +107,11 @@ class JdyAdminClient:
         raise MissingCorpDeployError("根据企业名称未检索到企业，请检查企业名称是否填写正确")
 
     def check_wework_owner(self, user_id: str, suite_id: int, suite_scenario: str) -> JdyOwnerCheckResult:
-        data = self.transport.post_json(
-            "/api/fx_sa/wxwork/get_owner",
-            {"user_id": user_id, "suite_id": suite_id, "suite_scenario": suite_scenario},
-        )
+        payload = {"suite_id": suite_id, "suite_scenario": suite_scenario}
+        normalized_user_id = user_id.strip()
+        if normalized_user_id:
+            payload["user_id"] = normalized_user_id
+        data = self.transport.post_json("/api/fx_sa/wxwork/get_owner", payload)
         owner = data.get("owner")
         if not isinstance(owner, dict):
             owner = {}
@@ -130,13 +131,15 @@ class JdyAdminClient:
         payload = {
             "corp_id": request.corp_id,
             "corp_name": request.corp_name,
-            "tenant_id": request.tenant_id,
             "token": request.token,
             "encoding_aes_key": request.encoding_aes_key,
-            "user_id": request.tenant_id,
             "suite_id": request.suite_id,
             "suite_scenario": request.suite_scenario,
         }
+        tenant_id = request.tenant_id.strip()
+        if tenant_id:
+            payload["tenant_id"] = tenant_id
+            payload["user_id"] = tenant_id
         data = self.transport.post_json("/api/fx_sa/wxwork/install_corp_deploy", payload)
         return JdyInstallResult(
             tenant_id=str(data.get("tenant_id", "")),

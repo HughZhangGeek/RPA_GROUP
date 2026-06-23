@@ -190,8 +190,41 @@ class JdyAdminClientTest(unittest.TestCase):
         self.assertEqual(install.owner_id, "user-1")
         self.assertEqual(transport.calls[0]["path"], "/api/fx_sa/wxwork/get_owner")
         self.assertEqual(transport.calls[1]["path"], "/api/fx_sa/wxwork/install_corp_deploy")
+        self.assertEqual(transport.calls[0]["payload"]["user_id"], "user-1")
         self.assertEqual(transport.calls[1]["payload"]["user_id"], "user-1")
+        self.assertEqual(transport.calls[1]["payload"]["tenant_id"], "user-1")
         self.assertEqual(transport.calls[1]["payload"]["encoding_aes_key"], "aes-secret")
+
+    def test_blank_userid_omits_owner_and_install_user_fields_to_preserve_jdy_default(self):
+        transport = FakeTransport(
+            [
+                {
+                    "can_bind_corp_secret": True,
+                    "can_update_corp_secret": False,
+                },
+                {"tenant_id": "backend-default-user", "owner_id": "backend-default-user"},
+            ]
+        )
+        client = JdyAdminClient(transport)
+
+        owner = client.check_wework_owner("", suite_id=1, suite_scenario="main")
+        install = client.install_corp_deploy(
+            JdyInstallRequest(
+                corp_id="corp-secret",
+                corp_name="安徽云速付",
+                tenant_id="",
+                token="token-secret",
+                encoding_aes_key="aes-secret",
+                suite_id=1,
+                suite_scenario="main",
+            )
+        )
+
+        self.assertTrue(owner.can_bind_corp_secret)
+        self.assertEqual(install.owner_id, "backend-default-user")
+        self.assertNotIn("user_id", transport.calls[0]["payload"])
+        self.assertNotIn("user_id", transport.calls[1]["payload"])
+        self.assertNotIn("tenant_id", transport.calls[1]["payload"])
 
 
 if __name__ == "__main__":

@@ -248,6 +248,42 @@ class JdyWecomBindServiceTest(unittest.TestCase):
         self.assertEqual(order_payload["auditorder"]["suiteid"], 1009479)
         self.assertEqual(order_payload["auditorder"]["corpappid"], "app-1")
 
+    def test_start_bind_preserves_jdy_default_userid_when_payload_userid_is_blank(self):
+        call_log = []
+        service, jdy_transport, _wecom_transport = make_service(
+            call_log,
+            install_response={"tenant_id": "backend-default-user", "owner_id": "backend-default-user"},
+        )
+        request = JdyWecomBindInput(
+            enterprise_name="上海测试客户",
+            plain_corp_id="ww001",
+            requested_user_id="",
+            suite_id=1,
+            suite_scenario="main",
+            wecom_suiteid=1009479,
+            suite_name="简道云",
+        )
+
+        result = service.start_bind(request, now=datetime(2026, 6, 16, 10, 0, 0))
+
+        owner_payload = [
+            call["payload"]
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/get_owner"
+        ][0]
+        install_payload = [
+            call["payload"]
+            for call in jdy_transport.calls
+            if call["path"] == "/api/fx_sa/wxwork/install_corp_deploy"
+        ][0]
+        self.assertNotIn("user_id", owner_payload)
+        self.assertNotIn("tenant_id", install_payload)
+        self.assertNotIn("user_id", install_payload)
+        self.assertEqual(result.context["jdy"]["requested_user_id"], "")
+        self.assertEqual(result.context["jdy"]["install_tenant_id"], "backend-default-user")
+        self.assertEqual(result.context["jdy"]["install_owner_id"], "backend-default-user")
+        self.assertEqual(result.context["jdy"]["bound_user_id"], "backend-default-user")
+
     def test_submit_online_uses_saved_audit_order(self):
         call_log = []
         service, _jdy_transport, wecom_transport = make_service(call_log)
