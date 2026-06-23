@@ -157,8 +157,7 @@ class WecomAdminClient:
         patched = []
         for item in self._extract_required_privilege_list(data):
             privilege = copy.deepcopy(item)
-            if int(privilege.get("id") or 0) in self.TARGET_PRIVILEGE_IDS:
-                privilege["b_check"] = True
+            self._check_target_privileges(privilege)
             patched.append(privilege)
         response = self.transport.post_json(
             "/wwopen/api/customApp/privilege/setCustomizedAppPrivilege",
@@ -254,6 +253,25 @@ class WecomAdminClient:
     @staticmethod
     def _headers(page: str, perm: str) -> Dict[str, str]:
         return {"x-wecom-developer-page": page, "x-wecom-developer-perm": perm}
+
+    @classmethod
+    def _check_target_privileges(cls, value: Any) -> None:
+        if isinstance(value, dict):
+            if cls._privilege_id(value) in cls.TARGET_PRIVILEGE_IDS:
+                value["b_check"] = True
+            for child in value.values():
+                cls._check_target_privileges(child)
+            return
+        if isinstance(value, list):
+            for item in value:
+                cls._check_target_privileges(item)
+
+    @staticmethod
+    def _privilege_id(value: Dict[str, Any]) -> int:
+        try:
+            return int(value.get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _extract_corpapp_rows(data: Dict[str, Any]) -> List[Dict[str, Any]]:

@@ -341,6 +341,40 @@ class WecomAdminClientTest(unittest.TestCase):
         self.assertEqual([item for item in privileges if item["id"] == 310000][0]["keep"], "a")
         self.assertEqual(result, [{"id": 310000, "b_check": True}])
 
+    def test_set_target_privileges_recursively_checks_nested_member_basic_info(self):
+        transport = FakeTransport(
+            [
+                {
+                    "data": {
+                        "privilege_list": [
+                            {
+                                "id": 20000,
+                                "b_check": False,
+                                "name": "成员基本信息",
+                                "children": [
+                                    {"id": 10006, "b_check": False, "name": "姓名"},
+                                    {"id": 10010, "b_check": False, "name": "部门名"},
+                                ],
+                            },
+                            {"id": 310000, "b_check": False, "name": "组织架构信息"},
+                        ]
+                    }
+                },
+                {"data": {}},
+            ]
+        )
+        client = WecomAdminClient(transport)
+
+        result = client.set_target_privileges(suiteid=1, app_id="app-1")
+
+        privileges = transport.calls[1]["payload"]["privilege_list"]
+        member_basic = [item for item in privileges if item["name"] == "成员基本信息"][0]
+        nested_by_id = {item["id"]: item for item in member_basic["children"]}
+        self.assertTrue(nested_by_id[10006]["b_check"])
+        self.assertTrue(nested_by_id[10010]["b_check"])
+        self.assertTrue([item for item in privileges if item["id"] == 310000][0]["b_check"])
+        self.assertEqual(result, privileges)
+
     def test_set_trial_rule_uses_nested_try_rule_info(self):
         transport = FakeTransport(
             [
