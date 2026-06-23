@@ -22,13 +22,15 @@ class FakeTransport:
 
 
 class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    def _config(self, simulate=True):
+    def _config(self, simulate=True, fallback_enabled=False, ack_timeout="0.1"):
         return load_c360_worker_config_from_env(
             {
                 "C360_BASE_URL": "http://127.0.0.1:3601",
                 "RPA_WORKER_TOKEN": "secret-token",
                 "RPA_WORKER_ID": "win-sim-001",
                 "RPA_WORKER_SIMULATE": "true" if simulate else "false",
+                "RPA_WORKER_COMPLETION_ACK_TIMEOUT_SECONDS": ack_timeout,
+                "RPA_WORKER_HTTP_EVENT_FALLBACK_ENABLED": "true" if fallback_enabled else "false",
             }
         )
 
@@ -73,6 +75,75 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.sent[2]["status"], "running")
         self.assertEqual(transport.sent[3]["status"], "succeeded")
         self.assertEqual(transport.sent[3]["result"], {"simulated": True, "handler": "wecom_bind_service"})
+
+    async def test_completed_waits_for_ack_without_http_fallback(self):
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-sim-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-ack",
+                    "task_type": "runtime_health_check",
+                    "route_key": "runtime_health_check",
+                    "simulate": True,
+                    "payload": {},
+                },
+                {
+                    "type": "worker.message_ack",
+                    "worker_id": "win-sim-001",
+                    "task_id": "task-ack",
+                    "message_type": "task.completed",
+                    "handled": True,
+                },
+            ]
+        )
+        events = []
+        runtime = C360WorkerRuntime(
+            config=self._config(),
+            transport=transport,
+            handlers=SimulatedTaskHandlers({}),
+            event_logger=events.append,
+        )
+
+        await runtime.run_until_idle()
+
+        self.assertEqual(transport.sent[-1]["type"], "task.completed")
+        self.assertIn("task completed ack task_id=task-ack handled=True", "\n".join(events))
+
+    async def test_completed_http_fallback_runs_when_ack_missing(self):
+        transport = FakeTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-sim-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-fallback",
+                    "task_type": "runtime_health_check",
+                    "route_key": "runtime_health_check",
+                    "simulate": True,
+                    "payload": {},
+                },
+            ]
+        )
+        events = []
+        fallback_calls = []
+
+        def fake_fallback(config, payload):
+            fallback_calls.append({"url": config.message_url, "payload": payload})
+
+        runtime = C360WorkerRuntime(
+            config=self._config(fallback_enabled=True, ack_timeout="0.1"),
+            transport=transport,
+            handlers=SimulatedTaskHandlers({}),
+            event_logger=events.append,
+        )
+
+        with patch("rpa_platform.worker.c360_worker_runtime._post_worker_message_fallback", side_effect=fake_fallback):
+            await runtime.run_until_idle()
+
+        self.assertEqual(fallback_calls[0]["url"], "http://127.0.0.1:3601/v1/rpa/workers/messages")
+        self.assertEqual(fallback_calls[0]["payload"]["type"], "task.completed")
+        self.assertEqual(fallback_calls[0]["payload"]["task_id"], "task-fallback")
+        self.assertIn("task completed ack missing task_id=task-fallback fallback=http", "\n".join(events))
 
     async def test_unknown_task_type_fails_without_crashing(self):
         transport = FakeTransport(

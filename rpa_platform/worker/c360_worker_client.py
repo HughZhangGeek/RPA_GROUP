@@ -9,6 +9,7 @@ from rpa_platform.worker.diagnostics import sanitize_diagnostic_payload
 
 
 C360_WORKER_WS_PATH = "/v1/rpa/workers/ws"
+C360_WORKER_MESSAGE_PATH = "/v1/rpa/workers/messages"
 DEFAULT_CAPABILITIES = ["wecom_bind_service", "diagnostics", "runtime_health_check"]
 
 
@@ -20,10 +21,13 @@ class C360WorkerConfigError(ValueError):
 class C360WorkerConfig:
     base_url: str
     ws_url: str
+    message_url: str
     worker_token: str
     worker_id: str
     capabilities: List[str]
     simulate: bool = True
+    completion_ack_timeout_seconds: float = 5.0
+    http_event_fallback_enabled: bool = True
 
 
 def build_c360_worker_ws_url(base_url: str) -> str:
@@ -38,6 +42,18 @@ def build_c360_worker_ws_url(base_url: str) -> str:
     return urlunparse((scheme, parsed.netloc, "%s%s" % (base_path, C360_WORKER_WS_PATH), "", "", ""))
 
 
+def build_c360_worker_message_url(base_url: str) -> str:
+    parsed = urlparse(base_url.rstrip("/"))
+    if parsed.scheme not in ("http", "https", "ws", "wss"):
+        raise C360WorkerConfigError("C360_BASE_URL must start with http:// or https://")
+    if not parsed.netloc:
+        raise C360WorkerConfigError("C360_BASE_URL must include host")
+
+    scheme = "https" if parsed.scheme in ("https", "wss") else "http"
+    base_path = parsed.path.rstrip("/")
+    return urlunparse((scheme, parsed.netloc, "%s%s" % (base_path, C360_WORKER_MESSAGE_PATH), "", "", ""))
+
+
 def load_c360_worker_config_from_env(env: Optional[Mapping[str, str]] = None) -> C360WorkerConfig:
     values = env or os.environ
     base_url = _required(values, "C360_BASE_URL")
@@ -45,13 +61,18 @@ def load_c360_worker_config_from_env(env: Optional[Mapping[str, str]] = None) ->
     worker_id = values.get("RPA_WORKER_ID") or values.get("RPA_ROBOT_ID") or "win-sim-001"
     capabilities = _split_capabilities(values.get("RPA_WORKER_CAPABILITIES", ""))
     simulate = _parse_bool(values.get("RPA_WORKER_SIMULATE", "true"))
+    ack_timeout = _parse_float(values.get("RPA_WORKER_COMPLETION_ACK_TIMEOUT_SECONDS", "5"), default=5.0)
+    fallback_enabled = _parse_bool(values.get("RPA_WORKER_HTTP_EVENT_FALLBACK_ENABLED", "true"))
     return C360WorkerConfig(
         base_url=base_url.rstrip("/"),
         ws_url=build_c360_worker_ws_url(base_url),
+        message_url=build_c360_worker_message_url(base_url),
         worker_token=token,
         worker_id=worker_id,
         capabilities=capabilities,
         simulate=simulate,
+        completion_ack_timeout_seconds=max(0.1, ack_timeout),
+        http_event_fallback_enabled=fallback_enabled,
     )
 
 
@@ -101,3 +122,10 @@ def _split_capabilities(raw: str) -> List[str]:
 
 def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _parse_float(raw: str, *, default: float) -> float:
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return default

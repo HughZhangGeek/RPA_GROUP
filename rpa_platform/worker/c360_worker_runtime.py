@@ -1,5 +1,8 @@
 import asyncio
 import inspect
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -40,18 +43,29 @@ class C360WorkerRuntime:
         self.handlers = handlers
         self.diagnostics = diagnostics if diagnostics is not None else getattr(handlers, "diagnostics", {})
         self.event_logger = event_logger
+        self._pending_messages: List[Dict[str, Any]] = []
 
     async def run_until_idle(self) -> None:
         await self.transport.send_json(build_worker_hello(self.config, self.diagnostics))
         self._log("worker hello sent worker_id=%s simulate=%s" % (self.config.worker_id, self.config.simulate))
         while True:
-            message = await self.transport.receive_json()
+            message = await self._receive_next_message()
             if message is None:
                 self._log("worker idle")
                 return
             message_type = message.get("type")
             if message_type == "worker.accepted":
                 self._log("worker accepted worker_id=%s" % _safe_text(message.get("worker_id")))
+                continue
+            if message_type == "worker.message_ack":
+                self._log(
+                    "worker message ack task_id=%s message_type=%s handled=%s"
+                    % (
+                        _safe_text(message.get("task_id")),
+                        _safe_text(message.get("message_type")),
+                        bool(message.get("handled")),
+                    )
+                )
                 continue
             if message_type == "task.dispatch":
                 self._log(
@@ -80,15 +94,15 @@ class C360WorkerRuntime:
         try:
             result = await self.handlers.handle(dispatch)
         except Exception as exc:
-            await self.transport.send_json(
-                {
-                    "type": "task.completed",
-                    "task_id": task_id,
-                    "status": "failed",
-                    "error_message": _redact_string(str(exc)),
-                }
-            )
+            completed_payload = {
+                "type": "task.completed",
+                "task_id": task_id,
+                "status": "failed",
+                "error_message": _redact_string(str(exc)),
+            }
+            await self.transport.send_json(completed_payload)
             self._log("task completed task_id=%s status=failed" % _safe_text(task_id))
+            await self._ensure_completed_ack(completed_payload)
             return
         if isinstance(result, WorkerTaskResult):
             for progress in result.progress:
@@ -99,25 +113,54 @@ class C360WorkerRuntime:
                     "task progress task_id=%s status=%s"
                     % (_safe_text(task_id), _safe_text(progress.get("status")))
                 )
-            await self.transport.send_json(
-                {
-                    "type": "task.completed",
-                    "task_id": task_id,
-                    "status": _worker_completed_status(result.status),
-                    "result": result.result,
-                }
-            )
-            self._log("task completed task_id=%s status=%s" % (_safe_text(task_id), _safe_text(result.status)))
-            return
-        await self.transport.send_json(
-            {
+            completed_payload = {
                 "type": "task.completed",
                 "task_id": task_id,
-                "status": "succeeded",
-                "result": result,
+                "status": _worker_completed_status(result.status),
+                "result": result.result,
             }
-        )
+            await self.transport.send_json(completed_payload)
+            self._log("task completed task_id=%s status=%s" % (_safe_text(task_id), _safe_text(result.status)))
+            await self._ensure_completed_ack(completed_payload)
+            return
+        completed_payload = {
+            "type": "task.completed",
+            "task_id": task_id,
+            "status": "succeeded",
+            "result": result,
+        }
+        await self.transport.send_json(completed_payload)
         self._log("task completed task_id=%s status=succeeded" % _safe_text(task_id))
+        await self._ensure_completed_ack(completed_payload)
+
+    async def _receive_next_message(self) -> Optional[Dict[str, Any]]:
+        if self._pending_messages:
+            return self._pending_messages.pop(0)
+        return await self.transport.receive_json()
+
+    async def _ensure_completed_ack(self, completed_payload: Dict[str, Any]) -> None:
+        task_id = str(completed_payload.get("task_id") or "")
+        timeout_seconds = float(self.config.completion_ack_timeout_seconds)
+        try:
+            while True:
+                message = await asyncio.wait_for(self.transport.receive_json(), timeout=timeout_seconds)
+                if message is None:
+                    break
+                if _is_matching_ack(message, task_id=task_id, message_type="task.completed"):
+                    if message.get("handled"):
+                        self._log("task completed ack task_id=%s handled=True" % _safe_text(task_id))
+                        return
+                    break
+                self._pending_messages.append(message)
+        except asyncio.TimeoutError:
+            pass
+
+        if not self.config.http_event_fallback_enabled:
+            self._log("task completed ack missing task_id=%s fallback=disabled" % _safe_text(task_id))
+            return
+        self._log("task completed ack missing task_id=%s fallback=http" % _safe_text(task_id))
+        await asyncio.to_thread(_post_worker_message_fallback, self.config, completed_payload)
+        self._log("task completed fallback sent task_id=%s" % _safe_text(task_id))
 
     def _log(self, message: str) -> None:
         if self.event_logger is not None:
@@ -130,6 +173,34 @@ def _safe_text(value: Any) -> str:
 
 def _worker_completed_status(status: str) -> str:
     return "failed" if status in {"failed", "blocked"} else "succeeded"
+
+
+def _is_matching_ack(message: Dict[str, Any], *, task_id: str, message_type: str) -> bool:
+    return (
+        message.get("type") == "worker.message_ack"
+        and str(message.get("task_id") or "") == task_id
+        and message.get("message_type") == message_type
+    )
+
+
+def _post_worker_message_fallback(config: C360WorkerConfig, payload: Dict[str, Any]) -> None:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        config.message_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-RPA-Worker-Token": config.worker_token,
+            "X-RPA-Worker-Id": config.worker_id,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(3.0, config.completion_ack_timeout_seconds)) as response:
+            if response.status >= 400:
+                raise RuntimeError("fallback HTTP status %s" % response.status)
+    except urllib.error.URLError as exc:
+        raise RuntimeError("fallback HTTP failed: %s" % exc) from exc
 
 
 class WebSocketsJsonTransport:
