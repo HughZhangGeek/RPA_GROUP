@@ -10,7 +10,11 @@ from rpa_platform.worker.c360_worker_client import (
     load_c360_worker_config_from_env,
 )
 from rpa_platform.worker.c360_task_handlers import build_c360_task_handlers
-from rpa_platform.worker.c360_worker_runtime import C360WorkerRuntime, connect_json_transport
+from rpa_platform.worker.c360_worker_runtime import (
+    C360WorkerRuntime,
+    HttpWorkerMessageReporter,
+    connect_json_transport,
+)
 from rpa_platform.worker.diagnostics import _redact_string
 
 
@@ -69,6 +73,7 @@ async def _run(config, event_logger=None) -> None:
             handlers=build_c360_task_handlers(config, diagnostics),
             diagnostics=diagnostics,
             event_logger=event_logger,
+            message_reporter=HttpWorkerMessageReporter(config),
         )
         await runtime.run_until_idle()
     finally:

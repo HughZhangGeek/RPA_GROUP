@@ -73,7 +73,7 @@ class WecomOnlineOrder:
 
 
 class WecomAdminClient:
-    TARGET_PRIVILEGE_IDS = {10006, 10010}
+    TARGET_PRIVILEGE_IDS = {310000, 10006, 10010}
 
     def __init__(self, transport: WecomAdminTransport):
         self.transport = transport
@@ -255,16 +255,22 @@ class WecomAdminClient:
         return {"x-wecom-developer-page": page, "x-wecom-developer-perm": perm}
 
     @classmethod
-    def _check_target_privileges(cls, value: Any) -> None:
+    def _check_target_privileges(cls, value: Any) -> bool:
         if isinstance(value, dict):
-            if cls._privilege_id(value) in cls.TARGET_PRIVILEGE_IDS:
-                value["b_check"] = True
+            should_check = cls._privilege_id(value) in cls.TARGET_PRIVILEGE_IDS
             for child in value.values():
-                cls._check_target_privileges(child)
-            return
+                if cls._check_target_privileges(child):
+                    should_check = True
+            if should_check:
+                value["b_check"] = True
+            return should_check
         if isinstance(value, list):
+            has_target = False
             for item in value:
-                cls._check_target_privileges(item)
+                if cls._check_target_privileges(item):
+                    has_target = True
+            return has_target
+        return False
 
     @staticmethod
     def _privilege_id(value: Dict[str, Any]) -> int:

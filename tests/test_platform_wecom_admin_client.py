@@ -348,8 +348,8 @@ class WecomAdminClientTest(unittest.TestCase):
         self.assertNotIn("corpappid", set_call["payload"])
         self.assertNotIn("privileges", set_call["payload"])
         privileges = set_call["payload"]["privilege_list"]
-        target_ids = {10006, 10010}
-        org_ids = {310000, 310001, 310002, 310100}
+        target_ids = {310000, 10006, 10010}
+        org_ids = {310001, 310002, 310100}
         self.assertTrue(all(item["b_check"] for item in privileges if item["id"] in target_ids))
         self.assertFalse(any(item["b_check"] for item in privileges if item["id"] in org_ids))
         self.assertFalse([item for item in privileges if item["id"] == 42][0]["b_check"])
@@ -387,7 +387,7 @@ class WecomAdminClientTest(unittest.TestCase):
         nested_by_id = {item["id"]: item for item in member_basic["children"]}
         self.assertTrue(nested_by_id[10006]["b_check"])
         self.assertTrue(nested_by_id[10010]["b_check"])
-        self.assertFalse([item for item in privileges if item["id"] == 310000][0]["b_check"])
+        self.assertTrue([item for item in privileges if item["id"] == 310000][0]["b_check"])
         self.assertEqual(result, privileges)
 
     def test_set_target_privileges_uses_new_privilege_list_and_real_val_tree(self):
@@ -461,7 +461,9 @@ class WecomAdminClientTest(unittest.TestCase):
         payload = transport.calls[1]["payload"]
         tree = payload["privilege_list"][0]["app_privilege"]
         by_val = _collect_b_check_by_val(tree)
-        self.assertFalse(by_val[310000])
+        self.assertTrue(by_val[21])
+        self.assertTrue(by_val[3100])
+        self.assertTrue(by_val[310000])
         self.assertTrue(by_val[10006])
         self.assertTrue(by_val[10010])
         self.assertFalse(by_val[10020])
@@ -601,7 +603,7 @@ class WecomAdminClientTest(unittest.TestCase):
 
         result = client.set_target_privileges(suiteid=1, app_id="app-1")
 
-        self.assertEqual(result, [{"id": 310000, "b_check": False}, {"id": 10006, "b_check": True}])
+        self.assertEqual(result, [{"id": 310000, "b_check": True}, {"id": 10006, "b_check": True}])
 
     def test_target_privilege_read_rejects_missing_privilege_list_without_writing(self):
         transport = FakeTransport([{"data": {}}])

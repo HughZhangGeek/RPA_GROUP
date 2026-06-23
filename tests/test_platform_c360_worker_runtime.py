@@ -1,10 +1,16 @@
 import asyncio
+import json
 import unittest
 from unittest.mock import patch
 
 from rpa_platform.worker.c360_worker_client import load_c360_worker_config_from_env
 from rpa_platform.worker import c360_worker
-from rpa_platform.worker.c360_worker_runtime import AioHttpJsonTransport, C360WorkerRuntime, WorkerTaskResult
+from rpa_platform.worker.c360_worker_runtime import (
+    AioHttpJsonTransport,
+    C360WorkerRuntime,
+    HttpWorkerMessageReporter,
+    WorkerTaskResult,
+)
 from rpa_platform.worker.simulated_handlers import SimulatedTaskHandlers
 
 
@@ -20,6 +26,13 @@ class FakeTransport:
         if not self.incoming:
             return None
         return self.incoming.pop(0)
+
+
+class FailingCompletedTransport(FakeTransport):
+    async def send_json(self, payload):
+        if payload.get("type") == "task.completed":
+            raise RuntimeError("websocket closed before completed")
+        await super().send_json(payload)
 
 
 class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
@@ -214,6 +227,49 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_after_hello[-1]["status"], "succeeded")
         self.assertEqual(sent_after_hello[-1]["result"]["status"], "ready_for_real_bind")
 
+    async def test_worker_reports_completed_to_side_channel_when_websocket_send_fails(self):
+        class SuccessfulHandlers:
+            async def handle(self, dispatch):
+                return WorkerTaskResult(
+                    status="success",
+                    result={"status": "success", "secret_corp_id": "corp-secret"},
+                    progress=[{"status": "real_write_completed"}],
+                )
+
+        reported = []
+
+        async def reporter(payload):
+            reported.append(dict(payload))
+
+        transport = FailingCompletedTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-server-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-side-channel",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": False,
+                    "payload": {"task_type": "wecom_bind_service"},
+                },
+            ]
+        )
+        runtime = C360WorkerRuntime(
+            config=self._config(simulate=False),
+            transport=transport,
+            handlers=SuccessfulHandlers(),
+            message_reporter=reporter,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "websocket closed"):
+            await runtime.run_until_idle()
+
+        completed = [item for item in reported if item.get("type") == "task.completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["task_id"], "task-side-channel")
+        self.assertEqual(completed[0]["status"], "succeeded")
+        self.assertEqual(completed[0]["result"]["status"], "success")
+
     async def test_worker_task_result_blocked_is_reported_as_failed_with_domain_status_in_result(self):
         class BlockedHandlers:
             async def handle(self, dispatch):
@@ -324,6 +380,49 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
 
 class C360WorkerCliTest(unittest.TestCase):
+    def _config(self):
+        return load_c360_worker_config_from_env(
+            {
+                "C360_BASE_URL": "https://jdycsm.sre.jdydevelop.com/csm-c360-api",
+                "RPA_WORKER_TOKEN": "secret-token",
+                "RPA_WORKER_ID": "win-server-001",
+            }
+        )
+
+    def test_http_worker_message_reporter_posts_worker_message_endpoint_with_identity_headers(self):
+        reporter = HttpWorkerMessageReporter(self._config(), timeout_seconds=3.5)
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok":true}'
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["body"] = request.data.decode("utf-8")
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        with patch("rpa_platform.worker.c360_worker_runtime.urllib.request.urlopen", side_effect=fake_urlopen):
+            reporter._post({"type": "task.completed", "task_id": "task-001", "status": "succeeded"})
+
+        self.assertEqual(
+            captured["url"],
+            "https://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/messages",
+        )
+        self.assertEqual(captured["headers"]["X-rpa-worker-token"], "secret-token")
+        self.assertEqual(captured["headers"]["X-rpa-worker-id"], "win-server-001")
+        self.assertEqual(captured["headers"]["Content-type"], "application/json")
+        self.assertEqual(captured["timeout"], 3.5)
+        self.assertEqual(json.loads(captured["body"])["type"], "task.completed")
+
     def test_default_cli_uses_persistent_runner_with_reconnect_delay(self):
         calls = []
 

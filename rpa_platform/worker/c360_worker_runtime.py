@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+import json
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -34,12 +36,14 @@ class C360WorkerRuntime:
         handlers: Any,
         diagnostics: Optional[Dict[str, Any]] = None,
         event_logger: Optional[Callable[[str], None]] = None,
+        message_reporter: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         self.config = config
         self.transport = transport
         self.handlers = handlers
         self.diagnostics = diagnostics if diagnostics is not None else getattr(handlers, "diagnostics", {})
         self.event_logger = event_logger
+        self.message_reporter = message_reporter
 
     async def run_until_idle(self) -> None:
         await self.transport.send_json(build_worker_hello(self.config, self.diagnostics))
@@ -66,9 +70,9 @@ class C360WorkerRuntime:
 
     async def _handle_dispatch(self, dispatch: Dict[str, Any]) -> None:
         task_id = str(dispatch.get("task_id", ""))
-        await self.transport.send_json({"type": "task.accepted", "task_id": task_id})
+        await self._send_worker_message({"type": "task.accepted", "task_id": task_id})
         self._log("task accepted task_id=%s" % _safe_text(task_id))
-        await self.transport.send_json(
+        await self._send_worker_message(
             {
                 "type": "task.progress",
                 "task_id": task_id,
@@ -80,7 +84,7 @@ class C360WorkerRuntime:
         try:
             result = await self.handlers.handle(dispatch)
         except Exception as exc:
-            await self.transport.send_json(
+            await self._send_worker_message(
                 {
                     "type": "task.completed",
                     "task_id": task_id,
@@ -94,12 +98,12 @@ class C360WorkerRuntime:
             for progress in result.progress:
                 payload = {"type": "task.progress", "task_id": task_id}
                 payload.update(progress)
-                await self.transport.send_json(payload)
+                await self._send_worker_message(payload)
                 self._log(
                     "task progress task_id=%s status=%s"
                     % (_safe_text(task_id), _safe_text(progress.get("status")))
                 )
-            await self.transport.send_json(
+            await self._send_worker_message(
                 {
                     "type": "task.completed",
                     "task_id": task_id,
@@ -109,7 +113,7 @@ class C360WorkerRuntime:
             )
             self._log("task completed task_id=%s status=%s" % (_safe_text(task_id), _safe_text(result.status)))
             return
-        await self.transport.send_json(
+        await self._send_worker_message(
             {
                 "type": "task.completed",
                 "task_id": task_id,
@@ -118,6 +122,22 @@ class C360WorkerRuntime:
             }
         )
         self._log("task completed task_id=%s status=succeeded" % _safe_text(task_id))
+
+    async def _send_worker_message(self, payload: Dict[str, Any]) -> None:
+        send_error = None
+        try:
+            await self.transport.send_json(payload)
+        except Exception as exc:
+            send_error = exc
+        if self.message_reporter is not None:
+            try:
+                reported = self.message_reporter(dict(payload))
+                if inspect.isawaitable(reported):
+                    await reported
+            except Exception as exc:
+                self._log("worker message reporter failed: %s" % _safe_text(exc))
+        if send_error is not None:
+            raise send_error
 
     def _log(self, message: str) -> None:
         if self.event_logger is not None:
@@ -130,6 +150,31 @@ def _safe_text(value: Any) -> str:
 
 def _worker_completed_status(status: str) -> str:
     return "failed" if status in {"failed", "blocked"} else "succeeded"
+
+
+class HttpWorkerMessageReporter:
+    def __init__(self, config: C360WorkerConfig, timeout_seconds: float = 10.0):
+        self.config = config
+        self.timeout_seconds = timeout_seconds
+        self.url = "%s/v1/rpa/workers/messages" % config.base_url.rstrip("/")
+
+    async def __call__(self, payload: Dict[str, Any]) -> None:
+        await asyncio.to_thread(self._post, payload)
+
+    def _post(self, payload: Dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self.url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-RPA-Worker-Token": self.config.worker_token,
+                "X-RPA-Worker-Id": self.config.worker_id,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            response.read()
 
 
 class WebSocketsJsonTransport:
