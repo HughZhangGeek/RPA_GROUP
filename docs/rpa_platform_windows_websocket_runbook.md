@@ -497,6 +497,7 @@ $env:WECOM_QR_ARTIFACT_DIR="C:\rpa_work\RPA_GROUP\.local\wecom-login-qr"
 $env:WECOM_ADMIN_COOKIE_FILE="C:\rpa_work\RPA_GROUP\.local\wecom-admin.cookie"
 $env:WECOM_BROWSER_PROFILE_DIR="C:\rpa_work\RPA_GROUP\.local\wecom-bind-browser-profile"
 $env:WECOM_LOGIN_RECOVERY_NODE_WORK_DIR="C:\rpa_work\RPA_GROUP\.local\playwright-wecom-login-recovery"
+$env:RPA_WORKER_RECONNECT_DELAY_SECONDS="5"
 ```
 
 以下敏感值只允许保存在 Windows 本机环境，不写入 Git、文档、聊天、PR 或日志摘录：
@@ -507,11 +508,15 @@ JDY_ADMIN_COOKIE_FILE 或 JDY_ADMIN_COOKIE
 WECOM_QR_NOTIFY_WEBHOOK_URL
 ```
 
-启动 worker：
+启动常驻 worker：
 
 ```powershell
-python -m rpa_platform.worker.c360_worker --once --verbose
+python -m rpa_platform.worker.c360_worker --verbose
 ```
+
+只做单轮验证时才追加 `--once`。正式执行面默认会在 WebSocket idle/关闭后按
+`RPA_WORKER_RECONNECT_DELAY_SECONDS` 重连；外层 PowerShell `while ($true)` 可继续作为进程 watchdog，
+但不再是唯一常驻机制。
 
 预期启动输出：
 
@@ -689,7 +694,9 @@ cd C:\rpa_work\RPA_GROUP
 . C:\rpa_work\RPA_GROUP\.local\rpa-worker-env.ps1
 $env:RPA_WORKER_SIMULATE="false"
 $env:RPA_WORKER_ALLOW_UNATTENDED_WRITE="true"
-python -m rpa_platform.worker.c360_worker --once --verbose
+$env:RPA_WORKER_UNATTENDED_WRITE_WAIT_SECONDS="300"
+$env:RPA_WORKER_RECONNECT_DELAY_SECONDS="5"
+python -m rpa_platform.worker.c360_worker --verbose
 ```
 
 ### 6.4 断线恢复验证

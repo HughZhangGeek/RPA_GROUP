@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -323,6 +324,38 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
 
 class C360WorkerCliTest(unittest.TestCase):
+    def test_default_cli_uses_persistent_runner_with_reconnect_delay(self):
+        calls = []
+
+        async def fake_run_forever(config, event_logger=None, reconnect_delay_seconds=0):
+            calls.append(
+                {
+                    "worker_id": config.worker_id,
+                    "event_logger": event_logger,
+                    "reconnect_delay_seconds": reconnect_delay_seconds,
+                }
+            )
+
+        async def unexpected_run(config, event_logger=None):
+            raise AssertionError("default CLI should use persistent runner")
+
+        with patch.object(c360_worker, "_run_forever", side_effect=fake_run_forever, create=True):
+            with patch.object(c360_worker, "_run", side_effect=unexpected_run):
+                exit_code = c360_worker.main(
+                    ["--verbose"],
+                    env={
+                        "C360_BASE_URL": "http://127.0.0.1:3601",
+                        "RPA_WORKER_TOKEN": "secret-token",
+                        "RPA_WORKER_ID": "win-sim-001",
+                        "RPA_WORKER_RECONNECT_DELAY_SECONDS": "0.25",
+                    },
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls[0]["worker_id"], "win-sim-001")
+        self.assertIsNotNone(calls[0]["event_logger"])
+        self.assertEqual(calls[0]["reconnect_delay_seconds"], 0.25)
+
     def test_verbose_flag_passes_event_logger_to_runner(self):
         calls = []
 
@@ -371,6 +404,41 @@ class C360WorkerCliTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(captured["transport"].closed)
+
+
+class C360WorkerPersistentLoopTest(unittest.IsolatedAsyncioTestCase):
+    async def test_run_forever_reconnects_after_idle_until_cancelled(self):
+        calls = []
+        sleeps = []
+        events = []
+        config = load_c360_worker_config_from_env(
+            {
+                "C360_BASE_URL": "http://127.0.0.1:3601",
+                "RPA_WORKER_TOKEN": "secret-token",
+                "RPA_WORKER_ID": "win-sim-001",
+            }
+        )
+
+        async def fake_run(config, event_logger=None):
+            calls.append(config.worker_id)
+            if len(calls) >= 2:
+                raise asyncio.CancelledError()
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        with patch.object(c360_worker, "_run", side_effect=fake_run):
+            with self.assertRaises(asyncio.CancelledError):
+                await c360_worker._run_forever(
+                    config,
+                    event_logger=events.append,
+                    reconnect_delay_seconds=0.25,
+                    sleep=fake_sleep,
+                )
+
+        self.assertEqual(calls, ["win-sim-001", "win-sim-001"])
+        self.assertEqual(sleeps, [0.25])
+        self.assertIn("worker reconnecting in 0.25s", "\n".join(events))
 
 
 class SimulatedTaskHandlersTest(unittest.IsolatedAsyncioTestCase):
