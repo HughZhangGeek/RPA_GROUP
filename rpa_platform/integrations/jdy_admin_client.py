@@ -85,19 +85,26 @@ class JdyAdminClient:
         return JdyCorpDeploySearchResult(rows=rows, has_more=bool(data.get("has_more")))
 
     def resolve_unique_corp(self, plain_corp_id: str, enterprise_name: str) -> JdyCorpDeploy:
-        first = self.search_corp_deploy_list(plain_corp_id)
-        if len(first.rows) == 1:
-            return first.rows[0]
-        if len(first.rows) > 1:
-            raise AmbiguousCorpDeployError("plain corp id matched multiple corp deploy rows")
+        corp_id = plain_corp_id.strip()
+        name = enterprise_name.strip()
+        if corp_id:
+            result = self.search_corp_deploy_list(corp_id)
+            if len(result.rows) == 1:
+                return result.rows[0]
+            if len(result.rows) > 1:
+                raise AmbiguousCorpDeployError("根据 CorpID 检索到多家企业，请联系管理员处理企业数据")
+            raise MissingCorpDeployError("根据 CorpID 未检索到企业，请检查 CorpID 是否填写正确")
 
-        second = self.search_corp_deploy_list(enterprise_name)
-        exact_rows = [row for row in second.rows if row.name == enterprise_name]
+        if not name:
+            raise MissingCorpDeployError("请填写 CorpID 或企业名称后重试")
+
+        result = self.search_corp_deploy_list(name)
+        exact_rows = [row for row in result.rows if row.name == name]
         if len(exact_rows) == 1:
             return exact_rows[0]
         if len(exact_rows) > 1:
-            raise AmbiguousCorpDeployError("enterprise name matched multiple corp deploy rows")
-        raise MissingCorpDeployError("no corp deploy row matched plain corp id or enterprise name")
+            raise AmbiguousCorpDeployError("根据企业名称检索到多家企业，请补充 CorpID 后重试")
+        raise MissingCorpDeployError("根据企业名称未检索到企业，请检查企业名称是否填写正确")
 
     def check_wework_owner(self, user_id: str, suite_id: int, suite_scenario: str) -> JdyOwnerCheckResult:
         data = self.transport.post_json(

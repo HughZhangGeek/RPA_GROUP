@@ -406,6 +406,7 @@ def _failure_summary(
         return {
             "status": "blocked",
             "reason": reason,
+            "error_msg": _public_error_msg(reason, exc),
             "detail": str(exc),
             "enterprise_name": bind_input.enterprise_name,
             "enterprise_short_name": bind_input.enterprise_short_name,
@@ -419,6 +420,7 @@ def _failure_summary(
             "wecom": {"suiteid": bind_input.wecom_suiteid, "suite_name": bind_input.suite_name},
         }
     result = _summary(bind_input, corp, None, "blocked", reason, owner_state)
+    result["error_msg"] = _public_error_msg(reason, exc)
     result["detail"] = str(exc)
     return result
 
@@ -438,6 +440,13 @@ def _missing_cookie_summary(bind_input: JdyWecomBindInput, exc: Exception) -> Di
         },
         "wecom": {"suiteid": bind_input.wecom_suiteid, "suite_name": bind_input.suite_name},
     }
+
+
+def _public_error_msg(reason: str, exc: Exception) -> str:
+    detail = str(exc).strip()
+    if reason == "jdy_corp_not_unique_or_missing" and detail:
+        return detail
+    return detail or reason
 
 
 def _build_fake_clients_for_test() -> Dict[str, Any]:

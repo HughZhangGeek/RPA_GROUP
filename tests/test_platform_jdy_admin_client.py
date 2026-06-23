@@ -53,10 +53,9 @@ class JdyAdminClientTest(unittest.TestCase):
         self.assertEqual(transport.calls[0]["path"], "/api/fx_sa/wxwork/get_corp_deploy_list")
         self.assertEqual(transport.calls[0]["payload"]["filter"], "安徽云速付")
 
-    def test_resolve_unique_prefers_plain_corp_id_then_name(self):
+    def test_resolve_unique_uses_corp_id_without_name_fallback(self):
         transport = FakeTransport(
             [
-                {"has_more": False, "corp_deploy_list": []},
                 {
                     "has_more": False,
                     "corp_deploy_list": [
@@ -79,7 +78,56 @@ class JdyAdminClientTest(unittest.TestCase):
         row = client.resolve_unique_corp(plain_corp_id="ww-demo", enterprise_name="安徽云速付")
 
         self.assertEqual(row.name, "安徽云速付")
-        self.assertEqual([call["payload"]["filter"] for call in transport.calls], ["ww-demo", "安徽云速付"])
+        self.assertEqual([call["payload"]["filter"] for call in transport.calls], ["ww-demo"])
+
+    def test_resolve_unique_allows_empty_corp_id_and_uses_enterprise_name(self):
+        transport = FakeTransport(
+            [
+                {
+                    "has_more": False,
+                    "corp_deploy_list": [
+                        {
+                            "corp_id": "corp-secret",
+                            "name": "安徽云速付",
+                            "tenant_id": "",
+                            "suite_name": "简道云",
+                            "integrate_suite_name": "简道云",
+                            "suite_id": 1,
+                            "suite_scenario": "main",
+                        }
+                    ],
+                },
+            ]
+        )
+        client = JdyAdminClient(transport)
+
+        row = client.resolve_unique_corp(plain_corp_id="", enterprise_name="安徽云速付")
+
+        self.assertEqual(row.corp_id, "corp-secret")
+        self.assertEqual([call["payload"]["filter"] for call in transport.calls], ["安徽云速付"])
+
+    def test_resolve_unique_reports_chinese_business_errors(self):
+        with self.assertRaisesRegex(MissingCorpDeployError, "根据 CorpID 未检索到企业"):
+            JdyAdminClient(
+                FakeTransport(
+                    [
+                        {"has_more": False, "corp_deploy_list": []},
+                    ]
+                )
+            ).resolve_unique_corp("ww-demo", "")
+
+        duplicate_name = {
+            "has_more": False,
+            "corp_deploy_list": [
+                {"corp_id": "a", "name": "安徽云速付", "suite_id": 1, "suite_scenario": "main"},
+                {"corp_id": "b", "name": "安徽云速付", "suite_id": 1, "suite_scenario": "main"},
+            ],
+        }
+        with self.assertRaisesRegex(AmbiguousCorpDeployError, "根据企业名称检索到多家企业"):
+            JdyAdminClient(FakeTransport([duplicate_name])).resolve_unique_corp("", "安徽云速付")
+
+        with self.assertRaisesRegex(MissingCorpDeployError, "请填写 CorpID 或企业名称后重试"):
+            JdyAdminClient(FakeTransport([])).resolve_unique_corp("", "")
 
     def test_resolve_unique_rejects_no_match_and_multiple_matches(self):
         with self.assertRaises(MissingCorpDeployError):

@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from rpa_platform.notifications.wecom_bot import WecomBotClient
@@ -21,6 +22,7 @@ from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError, build_
 
 
 BUSINESS_UNEXECUTABLE_REASONS = {
+    "missing_enterprise_identity",
     "missing_enterprise_name",
     "missing_corp_id",
     "missing_userid",
@@ -34,16 +36,24 @@ BUSINESS_UNEXECUTABLE_REASONS = {
 
 
 class RealWecomBindRecovery:
-    def __init__(self, orchestrator_factory: Callable[[Dict[str, Any]], Any]):
+    def __init__(
+        self,
+        orchestrator_factory: Callable[[Dict[str, Any]], Any],
+        env: Optional[Mapping[str, str]] = None,
+    ):
         self.orchestrator_factory = orchestrator_factory
+        self.env = dict(os.environ if env is None else env)
 
     def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        context = _with_default_userid(context, self.env)
         missing = _missing_required_fields(context)
         if missing:
             return _missing_required_business_result(missing)
         build_bind_input_from_context(context)
         orchestrator = self.orchestrator_factory(context)
-        return _coerce_business_unexecutable_result(dict(orchestrator.run(task_id=task_id, context=context)))
+        result = _coerce_business_unexecutable_result(dict(orchestrator.run(task_id=task_id, context=context)))
+        _copy_userid_source(result, context)
+        return result
 
 
 class RealWecomBindUnattendedWriteRecovery:
@@ -55,13 +65,14 @@ class RealWecomBindUnattendedWriteRecovery:
         clients_builder: Callable[..., Dict[str, Any]] = build_real_clients,
         write_runner: Optional[Callable[..., Dict[str, Any]]] = None,
     ):
-        self.env = dict(env or {})
+        self.env = dict(os.environ if env is None else env)
         self.wait_seconds = wait_seconds
         self.login_recovery_factory = login_recovery_factory
         self.clients_builder = clients_builder
         self.write_runner = write_runner
 
     def run(self, task_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        context = _with_default_userid(context, self.env)
         missing = _missing_required_fields(context)
         if missing:
             return _missing_required_business_result(missing, mode="unattended_write")
@@ -77,6 +88,7 @@ class RealWecomBindUnattendedWriteRecovery:
         if recoverable_preflight.get("status") not in {"ready_for_real_bind", "manual_confirm_required"}:
             result = _coerce_business_unexecutable_result(dict(recoverable_preflight))
             result["mode"] = "unattended_write"
+            _copy_userid_source(result, context)
             return result
 
         try:
@@ -96,7 +108,7 @@ class RealWecomBindUnattendedWriteRecovery:
                 "detail": str(exc),
             }
         runner = self.write_runner or run_unattended_wecom_bind_write
-        return runner(
+        result = runner(
             task_id=task_id,
             context=context,
             jdy_client=clients["jdy_client"],
@@ -108,6 +120,8 @@ class RealWecomBindUnattendedWriteRecovery:
             lock_file=default_lock_file(),
             wait_seconds=self.wait_seconds,
         )
+        _copy_userid_source(result, context)
+        return result
 
     def _build_login_recovery(self, context: Dict[str, Any]) -> Any:
         if self.login_recovery_factory is not None:
@@ -144,7 +158,10 @@ def build_wecom_bind_recovery_handler_from_env(
     env: Optional[Mapping[str, str]] = None,
 ) -> WecomBindRecoveryTaskHandler:
     config = LoginRecoveryConfig.from_env(dict(env) if env is not None else None)
-    recovery = RealWecomBindRecovery(orchestrator_factory=lambda context: _build_orchestrator(config, context))
+    recovery = RealWecomBindRecovery(
+        orchestrator_factory=lambda context: _build_orchestrator(config, context),
+        env=env,
+    )
     return WecomBindRecoveryTaskHandler(recovery)
 
 
@@ -326,10 +343,8 @@ def _merge_selector_lists(*selector_lists: str) -> str:
 def _missing_required_fields(context: Dict[str, Any]) -> list[str]:
     bind_input = build_bind_input_from_context(context)
     missing = []
-    if not bind_input.enterprise_name:
-        missing.append("enterprise_name")
-    if not bind_input.plain_corp_id:
-        missing.append("corp_id")
+    if not bind_input.enterprise_name and not bind_input.plain_corp_id:
+        missing.append("enterprise_identity")
     if not bind_input.requested_user_id:
         missing.append("userid")
     return missing
@@ -337,9 +352,16 @@ def _missing_required_fields(context: Dict[str, Any]) -> list[str]:
 
 def _missing_required_business_result(missing: list[str], mode: Optional[str] = None) -> Dict[str, Any]:
     reason_by_field = {
+        "enterprise_identity": "missing_enterprise_identity",
         "enterprise_name": "missing_enterprise_name",
         "corp_id": "missing_corp_id",
         "userid": "missing_userid",
+    }
+    error_msg_by_field = {
+        "enterprise_identity": "请填写 CorpID 或企业名称后重试",
+        "enterprise_name": "请填写 CorpID 或企业名称后重试",
+        "corp_id": "请填写 CorpID 或企业名称后重试",
+        "userid": "未配置默认绑定用户，请联系管理员配置默认 UserID",
     }
     result = {
         "status": "business_unexecutable",
@@ -347,6 +369,7 @@ def _missing_required_business_result(missing: list[str], mode: Optional[str] = 
         if len(missing) == 1
         else "missing_required_bind_context",
         "missing_fields": list(missing),
+        "error_msg": error_msg_by_field.get(missing[0], "请检查企业绑定任务必填字段后重试"),
     }
     if mode:
         result["mode"] = mode
@@ -365,6 +388,29 @@ def _first_text(context: Mapping[str, Any], *keys: str) -> str:
         if value is not None and str(value).strip():
             return str(value).strip()
     return ""
+
+
+def _with_default_userid(context: Dict[str, Any], env: Mapping[str, str]) -> Dict[str, Any]:
+    result = dict(context)
+    explicit_userid = _first_text(result, "requested_user_id", "userid", "user_id", "User_ID")
+    if explicit_userid:
+        result["requested_user_id"] = explicit_userid
+        result["userid"] = explicit_userid
+        result.setdefault("userid_source", "payload")
+        return result
+
+    default_userid = str(env.get("RPA_DEFAULT_BIND_USERID") or "").strip()
+    if default_userid:
+        result["requested_user_id"] = default_userid
+        result["userid"] = default_userid
+        result["userid_source"] = "default"
+    return result
+
+
+def _copy_userid_source(result: Dict[str, Any], context: Mapping[str, Any]) -> None:
+    userid_source = _first_text(context, "userid_source")
+    if userid_source:
+        result["userid_source"] = userid_source
 
 
 def _parse_int(raw: Any, default: int) -> int:
