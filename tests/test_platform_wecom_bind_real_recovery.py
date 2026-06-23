@@ -64,12 +64,12 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
 
         result = recovery.run(
             task_id="task-missing",
-            context={"enterprise_name": "zh_test_上海测试客户", "userid": "zh_test_userid"},
+            context={"userid": "zh_test_userid"},
         )
 
         self.assertEqual(result["status"], "business_unexecutable")
-        self.assertEqual(result["reason"], "missing_corp_id")
-        self.assertIn("corp_id", result["missing_fields"])
+        self.assertEqual(result["reason"], "missing_enterprise_identity")
+        self.assertIn("enterprise_identity", result["missing_fields"])
         self.assertEqual(orchestrator.calls, [])
 
     def test_business_preflight_blocked_result_becomes_business_unexecutable(self):

@@ -31,6 +31,7 @@ def run_unattended_wecom_bind_write(
     wecom_client: WecomAdminClient,
     secret_generator: WecomSecretGenerator,
     preflight_runner: Optional[Callable[..., Dict[str, Any]]] = None,
+    login_recovery: Optional[Dict[str, Any]] = None,
     context_file: Optional[Path] = None,
     lock_file: Optional[Path] = None,
     now: Optional[datetime] = None,
@@ -66,6 +67,8 @@ def run_unattended_wecom_bind_write(
             }
 
         write_preflight, preflight_metadata = _preflight_for_write(preflight)
+        if login_recovery:
+            preflight_metadata.setdefault("login_recovery", login_recovery)
         if write_preflight is None:
             return _blocked_preflight_result(preflight)
 

@@ -193,6 +193,34 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
         self.assertEqual(result["login_recovery"]["notify_attempts"], 1)
         self.assertIn("/wwopen/developer/order/set", [call["path"] for call in wecom_transport.calls])
 
+    def test_login_recovery_keyword_metadata_is_accepted_by_real_write_runner(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        def recovered_preflight(*_args, **_kwargs):
+            return {
+                "status": "ready_for_real_bind",
+                "reason": "ready_for_confirm_write",
+                "preflight": {"status": "ok", "reason": "ready_for_confirm_write"},
+            }
+
+        jdy_client, wecom_client, _jdy_transport, _wecom_transport = self._clients()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_unattended_wecom_bind_write(
+                task_id="task-recovered-login-keyword",
+                context=self._context(),
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                preflight_runner=recovered_preflight,
+                login_recovery={"notify_attempts": 2, "restored": True},
+                context_file=Path(tmpdir) / "context.json",
+                lock_file=Path(tmpdir) / "write.lock",
+                wait_seconds=0,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["login_recovery"]["notify_attempts"], 2)
+
     def test_missing_cookie_or_login_source_returns_blocked_without_write(self):
         from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError
         from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
