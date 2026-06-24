@@ -1,4 +1,5 @@
 import json
+import inspect
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -22,6 +23,40 @@ from rpa_platform.worker.dingtalk_group_handoff_batch import (
 
 
 class DingtalkGroupHandoffBatchTest(unittest.TestCase):
+    def test_batch_runner_reports_row_progress_failures_and_workbook_saves(self):
+        self.assertIn(
+            "progress",
+            inspect.signature(DingtalkGroupHandoffBatchRunner).parameters,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workbook = _write_workbook(
+                Path(tmpdir) / "groups.xlsx",
+                [
+                    ("群名称", "群状态"),
+                    ("群A", ""),
+                    ("群B", ""),
+                ],
+            )
+            backend = _FakeHandoffBackend(
+                {
+                    "群A": STATUS_SUCCESS,
+                    "群B": RuntimeError("添加成员入口失败"),
+                }
+            )
+            messages = []
+
+            DingtalkGroupHandoffBatchRunner(backend, progress=messages.append).run(
+                BatchOptions(workbook=workbook, save_every=1)
+            )
+
+            output = "\n".join(messages)
+            self.assertIn("开始处理 row=2 group=群A", output)
+            self.assertIn("每行最终状态 row=2 group=群A status=添加成功", output)
+            self.assertIn("开始处理 row=3 group=群B", output)
+            self.assertIn("异常/失败收口 row=3 group=群B error=添加成员入口失败", output)
+            self.assertIn("每行最终状态 row=3 group=群B status=异常：添加成员入口失败", output)
+            self.assertIn("保存 workbook", output)
+
     def test_processes_non_empty_groups_writes_status_and_continues_after_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workbook = _write_workbook(
@@ -168,9 +203,14 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
             self.assertNotIn(("position_click", 1874, 66), calls)
 
     def test_gui_backend_clicks_add_member_image_when_detected(self):
+        self.assertIn(
+            "progress",
+            inspect.signature(DingtalkGroupHandoffGuiBackend).parameters,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             elements_dir = _write_handoff_files(Path(tmpdir))
             calls = []
+            messages = []
             backend = DingtalkGroupHandoffGuiBackend(
                 elements_dir=elements_dir,
                 uia_driver=_FakeDriver(calls),
@@ -185,6 +225,7 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
                 clipboard_backend=_FakeClipboard(calls),
                 sleep=lambda seconds: calls.append(("sleep", seconds)),
                 window_guard=_FakeWindowGuard(calls),
+                progress=messages.append,
             )
 
             status = backend.handoff_group("群A", "季钰杰")
@@ -221,6 +262,52 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
                 ],
                 _windows(calls, 12),
             )
+            output = "\n".join(messages)
+            self.assertIn("捕获/唤起钉钉窗口", output)
+            self.assertIn("点击钉钉就绪坐标 (793,963)", output)
+            self.assertIn("呼出搜索 ctrl+shift+f", output)
+            self.assertIn("复制/粘贴群名 group=群A", output)
+            self.assertIn("点击群分类", output)
+            self.assertIn("识别普通群图片成功", output)
+            self.assertIn("点击设置 (1874,66)", output)
+            self.assertIn("识别/点击添加成员成功", output)
+            self.assertIn("点击成员输入框 (678,366)", output)
+            self.assertIn("输入成员名 member=季钰杰", output)
+            self.assertIn("检测成员已在群内：未命中", output)
+            self.assertIn("点击确认 (700,805)", output)
+            self.assertIn("动作最终状态 group=群A status=添加成功", output)
+
+    def test_gui_backend_reports_group_not_found_and_closeout(self):
+        self.assertIn(
+            "progress",
+            inspect.signature(DingtalkGroupHandoffGuiBackend).parameters,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            elements_dir = _write_handoff_files(Path(tmpdir))
+            calls = []
+            messages = []
+            backend = DingtalkGroupHandoffGuiBackend(
+                elements_dir=elements_dir,
+                uia_driver=_FakeDriver(calls),
+                gui_backend=_FakeGui(
+                    calls,
+                    image_results={
+                        "normal_group.png": None,
+                    },
+                ),
+                clipboard_backend=_FakeClipboard(calls),
+                sleep=lambda _seconds: None,
+                window_guard=_FakeWindowGuard(calls),
+                progress=messages.append,
+            )
+
+            status = backend.handoff_group("群A", "季钰杰")
+
+            self.assertEqual(status, STATUS_GROUP_NOT_FOUND)
+            output = "\n".join(messages)
+            self.assertIn("识别普通群图片失败", output)
+            self.assertIn("异常/失败收口：重新捕获钉钉窗口并按 Esc", output)
+            self.assertIn("动作最终状态 group=群A status=群不存在", output)
 
     def test_gui_backend_blocks_when_dingtalk_window_is_not_captured(self):
         with tempfile.TemporaryDirectory() as tmpdir:

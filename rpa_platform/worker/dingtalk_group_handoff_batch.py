@@ -2,7 +2,7 @@ import argparse
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Protocol, Tuple
+from typing import Any, Callable, List, Optional, Protocol, Tuple
 
 from openpyxl import load_workbook
 
@@ -27,6 +27,8 @@ DEFAULT_CONFIRM_POSITION = (700, 805)
 DEFAULT_ADD_MEMBER_POSITION = (1613, 243)
 DEFAULT_MEMBER_INPUT_POSITION = (678, 366)
 DEFAULT_DINGTALK_READY_POSITION = (793, 963)
+
+ProgressCallback = Callable[[str], None]
 
 STATUS_SUCCESS = "添加成功"
 STATUS_MEMBER_ALREADY_IN = "成员已在群内"
@@ -53,6 +55,7 @@ class DingtalkWindowGuard:
         sleep: Any = time.sleep,
         activation_delay_seconds: float = 0.5,
         title_keywords: Tuple[str, ...] = ("钉钉", "DingTalk"),
+        progress: Optional[ProgressCallback] = None,
     ) -> None:
         if window_backend is None:
             import pygetwindow  # type: ignore
@@ -63,10 +66,13 @@ class DingtalkWindowGuard:
         self._sleep = sleep
         self._activation_delay_seconds = activation_delay_seconds
         self._title_keywords = title_keywords
+        self._progress = progress or _noop_progress
 
     def capture(self) -> str:
+        self._emit("捕获钉钉窗口：title_keywords=%s" % "/".join(self._title_keywords))
         windows = self._find_windows()
         if not windows:
+            self._emit("未捕获到钉钉窗口，发送 shift+q 唤起")
             self._trigger_dingtalk_activation_shortcut()
             windows = self._find_windows()
 
@@ -81,9 +87,13 @@ class DingtalkWindowGuard:
                     window.activate()
             except Exception as exc:
                 raise DingtalkWindowNotCaptured("激活钉钉窗口失败：%s" % _short_error(exc)) from exc
+            self._emit("钉钉窗口捕获成功：title=%s" % (title or "钉钉"))
             return title or "钉钉"
 
         raise DingtalkWindowNotCaptured("未找到标题包含 钉钉/DingTalk 的窗口")
+
+    def _emit(self, message: str) -> None:
+        self._progress(message)
 
     def _find_windows(self) -> List[Any]:
         windows = []
@@ -143,11 +153,27 @@ class BatchResult:
 
 
 class DingtalkGroupHandoffBatchRunner:
-    def __init__(self, backend: GroupHandoffBackend) -> None:
+    def __init__(
+        self,
+        backend: GroupHandoffBackend,
+        progress: Optional[ProgressCallback] = None,
+    ) -> None:
         self._backend = backend
+        self._progress = progress or _noop_progress
 
     def run(self, options: BatchOptions) -> BatchResult:
         workbook_path = Path(options.workbook)
+        self._emit(
+            "打开 workbook=%s sheet=%s start_row=%s limit=%s skip_completed=%s dry_run=%s"
+            % (
+                workbook_path,
+                options.sheet,
+                options.start_row,
+                options.limit,
+                options.skip_completed,
+                options.dry_run,
+            )
+        )
         workbook = load_workbook(workbook_path)
         sheet = workbook[options.sheet]
 
@@ -164,33 +190,50 @@ class DingtalkGroupHandoffBatchRunner:
                 continue
             status_cell = sheet.cell(row=row_number, column=2)
             if options.skip_completed and _cell_text(status_cell.value):
+                self._emit(
+                    "跳过已完成 row=%s group=%s status=%s"
+                    % (row_number, group_name, _cell_text(status_cell.value))
+                )
                 skipped += 1
                 continue
             if options.limit is not None and (processed + len(planned_groups)) >= options.limit:
+                self._emit("达到 limit=%s，停止继续处理" % options.limit)
                 break
 
+            self._emit("开始处理 row=%s group=%s" % (row_number, group_name))
             if options.dry_run:
+                self._emit("预览模式 row=%s group=%s，不执行 GUI、不写状态" % (row_number, group_name))
                 planned_groups.append(group_name)
                 continue
 
             try:
                 status = self._backend.handoff_group(group_name, options.member_name)
             except Exception as exc:
+                self._emit(
+                    "异常/失败收口 row=%s group=%s error=%s"
+                    % (row_number, group_name, _short_error(exc))
+                )
                 _try_close_dialogs(self._backend)
                 status = "异常：%s" % _short_error(exc)
 
             status_cell.value = status
             rows.append(BatchRowResult(row=row_number, group_name=group_name, status=status))
+            self._emit(
+                "每行最终状态 row=%s group=%s status=%s"
+                % (row_number, group_name, status)
+            )
             processed += 1
             if _is_failure_status(status):
                 failed += 1
             changed_since_save += 1
             if changed_since_save >= max(int(options.save_every), 1):
                 workbook.save(workbook_path)
+                self._emit("保存 workbook=%s" % workbook_path)
                 changed_since_save = 0
 
         if changed_since_save:
             workbook.save(workbook_path)
+            self._emit("保存 workbook=%s" % workbook_path)
 
         return BatchResult(
             processed_count=processed,
@@ -199,6 +242,9 @@ class DingtalkGroupHandoffBatchRunner:
             planned_groups=planned_groups,
             rows=rows,
         )
+
+    def _emit(self, message: str) -> None:
+        self._progress(message)
 
 
 class DingtalkGroupHandoffGuiBackend:
@@ -222,6 +268,7 @@ class DingtalkGroupHandoffGuiBackend:
         dingtalk_ready_position: Tuple[int, int] = DEFAULT_DINGTALK_READY_POSITION,
         step_delay_seconds: float = 1.0,
         window_guard: Any = None,
+        progress: Optional[ProgressCallback] = None,
     ) -> None:
         if gui_backend is None:
             import pyautogui  # type: ignore
@@ -252,6 +299,7 @@ class DingtalkGroupHandoffGuiBackend:
         self._dingtalk_ready_position = dingtalk_ready_position
         self._step_delay_seconds = step_delay_seconds
         self._window_guard = window_guard or DingtalkWindowGuard()
+        self._progress = progress or _noop_progress
         self._smoke_runner = DingtalkGroupHandoffSmokeRunner(
             uia_driver=self._uia_driver,
             gui_backend=self._gui,
@@ -260,11 +308,15 @@ class DingtalkGroupHandoffGuiBackend:
         )
 
     def handoff_group(self, group_name: str, member_name: str) -> str:
+        self._emit("捕获/唤起钉钉窗口 group=%s" % group_name)
         if not self._capture_dingtalk_window():
-            return STATUS_DINGTALK_WINDOW_NOT_CAPTURED
+            self._emit("钉钉窗口捕获失败 group=%s" % group_name)
+            return self._finish_group(group_name, STATUS_DINGTALK_WINDOW_NOT_CAPTURED)
 
+        self._emit("点击钉钉就绪坐标 %s" % _format_position(self._dingtalk_ready_position))
         self._uia_driver.click_position(*self._dingtalk_ready_position)
         self._delay_step()
+        self._emit("呼出搜索 ctrl+shift+f")
         self._smoke_runner.open_search(
             self._paths.group_search_input,
             search_open_mode="shortcut",
@@ -272,6 +324,7 @@ class DingtalkGroupHandoffGuiBackend:
         )
         self._delay_step()
 
+        self._emit("复制/粘贴群名 group=%s" % group_name)
         self._clipboard.copy(group_name)
         self._delay_step()
         self._gui.hotkey("ctrl", "a")
@@ -279,38 +332,63 @@ class DingtalkGroupHandoffGuiBackend:
         self._gui.hotkey("ctrl", "v")
         self._delay_step()
 
+        self._emit("点击群分类")
         self._smoke_runner.click_collected_path(
             self._paths.select_search_type_group,
             click_mode="position",
         )
         self._delay_step()
 
+        self._emit(
+            "识别普通群图片 image=%s region=%s confidence=%.2f"
+            % (
+                self._paths.normal_group_image.name,
+                _format_region(self._search_region),
+                self._normal_group_confidence,
+            )
+        )
         if not self._click_image_if_present(
             self._paths.normal_group_image,
             confidence=self._normal_group_confidence,
             region=self._search_region,
         ):
+            self._emit("识别普通群图片失败")
             self.close_active_dialogs()
-            return STATUS_GROUP_NOT_FOUND
+            return self._finish_group(group_name, STATUS_GROUP_NOT_FOUND)
+        self._emit("识别普通群图片成功")
         self._delay_step()
 
+        self._emit("点击设置 %s" % _format_position(self._settings_position))
         self._uia_driver.click_position(*self._settings_position)
         self._delay_step()
 
         if not self._add_member_image.exists():
+            self._emit("识别/点击添加成员失败：缺少 image=%s" % self._add_member_image.name)
             self.close_active_dialogs()
-            return STATUS_ADD_MEMBER_ENTRY_FAILED
+            return self._finish_group(group_name, STATUS_ADD_MEMBER_ENTRY_FAILED)
+        self._emit(
+            "识别/点击添加成员 image=%s region=%s confidence=%.2f"
+            % (
+                self._add_member_image.name,
+                _format_region(self._add_member_region),
+                self._add_member_confidence,
+            )
+        )
         if not self._click_image_if_present(
             self._add_member_image,
             confidence=self._add_member_confidence,
             region=self._add_member_region,
         ):
+            self._emit("识别/点击添加成员失败")
             self.close_active_dialogs()
-            return STATUS_ADD_MEMBER_ENTRY_FAILED
+            return self._finish_group(group_name, STATUS_ADD_MEMBER_ENTRY_FAILED)
+        self._emit("识别/点击添加成员成功")
         self._delay_step()
 
+        self._emit("点击成员输入框 %s" % _format_position(self._member_input_position))
         self._uia_driver.click_position(*self._member_input_position)
         self._delay_step()
+        self._emit("输入成员名 member=%s" % member_name)
         self._clipboard.copy(member_name)
         self._delay_step()
         self._gui.hotkey("ctrl", "a")
@@ -320,28 +398,50 @@ class DingtalkGroupHandoffGuiBackend:
         self._press("enter")
         self._delay_step()
 
+        self._emit(
+            "检测成员已在群内 image=%s region=%s confidence=%.2f"
+            % (
+                self._member_already_in_image.name,
+                _format_region(self._member_already_in_region),
+                self._member_already_in_confidence,
+            )
+        )
         if self._click_image_if_present(
             self._member_already_in_image,
             confidence=self._member_already_in_confidence,
             region=self._member_already_in_region,
             click=False,
         ):
+            self._emit("检测成员已在群内：命中")
             self.close_active_dialogs()
-            return STATUS_MEMBER_ALREADY_IN
+            return self._finish_group(group_name, STATUS_MEMBER_ALREADY_IN)
+        self._emit("检测成员已在群内：未命中")
 
+        self._emit("点击确认 %s" % _format_position(self._confirm_position))
         try:
             self._uia_driver.click_position(*self._confirm_position)
-        except Exception:
+        except Exception as exc:
+            self._emit("点击确认失败：%s" % _short_error(exc))
             self.close_active_dialogs()
-            return STATUS_CONFIRM_NOT_CLICKED
+            return self._finish_group(group_name, STATUS_CONFIRM_NOT_CLICKED)
         self._delay_step()
-        return STATUS_SUCCESS
+        return self._finish_group(group_name, STATUS_SUCCESS)
 
     def close_active_dialogs(self) -> None:
+        self._emit("异常/失败收口：重新捕获钉钉窗口并按 Esc")
         if not self._capture_dingtalk_window():
+            self._emit("异常/失败收口：钉钉窗口未捕获，跳过 Esc")
             return
         self._press("esc")
         self._delay_step()
+        self._emit("异常/失败收口：已发送 Esc")
+
+    def _finish_group(self, group_name: str, status: str) -> str:
+        self._emit("动作最终状态 group=%s status=%s" % (group_name, status))
+        return status
+
+    def _emit(self, message: str) -> None:
+        self._progress(message)
 
     def _delay_step(self) -> None:
         self._sleep(self._step_delay_seconds)
@@ -420,7 +520,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "mouse out of the RDP window." % args.pause_before_start
             )
             time.sleep(args.pause_before_start)
-        window_guard = DingtalkWindowGuard()
+        window_guard = DingtalkWindowGuard(progress=print)
         try:
             window_title = window_guard.capture()
         except DingtalkWindowNotCaptured as exc:
@@ -431,9 +531,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             elements_dir=Path(args.elements_dir),
             step_delay_seconds=args.step_delay,
             window_guard=window_guard,
+            progress=print,
         )
 
-    result = DingtalkGroupHandoffBatchRunner(backend).run(options)
+    result = DingtalkGroupHandoffBatchRunner(backend, progress=print).run(options)
     if args.dry_run:
         for index, group_name in enumerate(result.planned_groups, start=1):
             print("%s. %s" % (index, group_name))
@@ -448,6 +549,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 class _DryRunBackend:
     def handoff_group(self, group_name: str, member_name: str) -> str:
         raise RuntimeError("dry-run backend should not be called")
+
+
+def _noop_progress(_message: str) -> None:
+    return
 
 
 def _cell_text(value: Any) -> str:
@@ -475,6 +580,19 @@ def _try_close_dialogs(backend: Any) -> None:
         close()
     except Exception:
         return
+
+
+def _format_position(position: Tuple[int, int]) -> str:
+    return "(%s,%s)" % (int(position[0]), int(position[1]))
+
+
+def _format_region(region: Tuple[int, int, int, int]) -> str:
+    return "(%s,%s,%s,%s)" % (
+        int(region[0]),
+        int(region[1]),
+        int(region[2]),
+        int(region[3]),
+    )
 
 
 def _validate_local_assets(elements_dir: Path) -> None:

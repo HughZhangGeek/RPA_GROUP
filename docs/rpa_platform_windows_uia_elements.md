@@ -290,14 +290,28 @@ python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RP
 小批量真实执行 3 行：
 
 ```powershell
-python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --limit 3 --skip-completed --pause-before-start 5
+python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --start-row 2 --limit 3 --pause-before-start 5
 ```
+
+如果只想跳过 B 列已有状态的行，可额外加 `--skip-completed`。
 
 确认稳定后正式运行：
 
 ```powershell
 python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --skip-completed
 ```
+
+真实执行时终端会逐步输出每一行和每个关键动作的日志，便于现场定位停在哪一步。日志只包含 workbook 路径、行号、群名、成员名、坐标、截图模板名、region、confidence、状态和简短异常，不会输出 `.env`、token、webhook 或 worker 密钥。
+
+日志覆盖：
+
+- 打开 workbook、开始处理 `row/group`、跳过已完成行、达到 `limit`、每行最终状态、保存 workbook。
+- 捕获/唤起钉钉窗口；找不到窗口时会记录发送 `shift+q` 后重试。
+- 点击钉钉就绪坐标 `(793,963)`、呼出搜索 `ctrl+shift+f`、复制/粘贴群名、点击群分类。
+- 识别普通群图片 `normal_group.png` 的成功/失败，失败时写 `群不存在` 并收口。
+- 点击设置 `(1874,66)`，识别/点击 `add_member.png`，点击成员输入框 `(678,366)`，输入成员名。
+- 检测 `member_already_in.png` 是否命中；命中写 `成员已在群内` 并收口。
+- 点击确认 `(700,805)`，以及异常/失败收口时重新捕获钉钉窗口并发送一次 `Esc`。
 
 可用参数：
 
