@@ -1,6 +1,7 @@
 fastapi==0.115.12
 uvicorn==0.34.2
 pandas==2.0.3
+openpyxl==3.1.5
 pyautogui==0.9.54
 pydantic==2.11.5
 PyGetWindow==0.0.9
