@@ -183,7 +183,7 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
                     },
                 ),
                 clipboard_backend=_FakeClipboard(calls),
-                sleep=lambda _seconds: None,
+                sleep=lambda seconds: calls.append(("sleep", seconds)),
                 window_guard=_FakeWindowGuard(calls),
             )
 
@@ -193,6 +193,23 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
             self.assertEqual(calls[0], ("capture_window",))
             self.assertIn(("locate", "add_member.png", 0.75, (1441, 50, 455, 576)), calls)
             self.assertIn(("position_click", 1617, 243), calls)
+            self.assertIn(
+                [
+                    ("position_click", 1617, 243),
+                    ("sleep", 1.0),
+                    ("position_click", 678, 366),
+                    ("sleep", 1.0),
+                    ("clipboard_copy", "季钰杰"),
+                    ("sleep", 1.0),
+                    ("hotkey", ("ctrl", "a")),
+                    ("sleep", 1.0),
+                    ("hotkey", ("ctrl", "v")),
+                    ("sleep", 1.0),
+                    ("press", "enter"),
+                    ("sleep", 1.0),
+                ],
+                _windows(calls, 12),
+            )
 
     def test_gui_backend_blocks_when_dingtalk_window_is_not_captured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -415,6 +432,10 @@ def _column_values(path: Path, column: str, start: int, end: int):
     workbook = load_workbook(path)
     sheet = workbook["Sheet1"]
     return [sheet[f"{column}{row}"].value for row in range(start, end + 1)]
+
+
+def _windows(values, size):
+    return [values[index : index + size] for index in range(0, len(values) - size + 1)]
 
 
 if __name__ == "__main__":

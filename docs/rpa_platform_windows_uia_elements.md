@@ -290,7 +290,7 @@ python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RP
 小批量真实执行 3 行：
 
 ```powershell
-python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --limit 3 --skip-completed --pause-before-start 5 --step-delay 2
+python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --limit 3 --skip-completed --pause-before-start 5
 ```
 
 确认稳定后正式运行：
@@ -325,8 +325,8 @@ python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RP
 注意：
 
 - 执行前保持钉钉窗口可见，并把 Mac 本机鼠标移出 RDP 窗口，避免干扰 RDP 内坐标点击。真实执行会先捕获并激活标题包含 `钉钉` 或 `DingTalk` 的窗口；如果标题查找失败，会先发送一次 `shift+q` 尝试唤起钉钉，再重新捕获。成功时终端会打印 `Captured DingTalk window: ...`；捕获失败会打印 `DingTalk window capture failed: ...` 并退出，不写 Excel。
-- 批量脚本默认使用 `ctrl+shift+f` 呼出搜索框，避免钉钉 UIA 点击返回成功但实际没有聚焦。
-- 批量脚本进入设置页后用 `.local\elements\dingtalk_group_handoff\add_member.png` 在 `region=(1441,50,455,576)` 内识别“添加成员”入口；识别失败会写 `添加成员入口失败`，保存当前行，然后继续下一行。
+- 批量脚本默认使用 `ctrl+shift+f` 呼出搜索框，避免钉钉 UIA 点击返回成功但实际没有聚焦；默认每个动作步骤之间等待 `1` 秒。
+- 批量脚本进入设置页后用 `.local\elements\dingtalk_group_handoff\add_member.png` 在 `region=(1441,50,455,576)` 内识别“添加成员”入口；点击后会再点击成员输入框坐标 `(678,366)`，再粘贴成员姓名并回车。识别失败会写 `添加成员入口失败`，保存当前行，然后继续下一行。
 - 群不存在、添加成员入口失败、成员已在群内等提前收口分支会先重新捕获钉钉窗口，再发送一次 `Esc` 关闭当前搜索/添加成员弹层，避免第二次 `Esc` 落到主窗口导致钉钉退出。
 - 搜索群名和成员名使用剪贴板粘贴；PowerShell 中文参数不稳定时，优先使用默认 `--member-name`。
 - 本地资产仍放在 `.local\elements\dingtalk_group_handoff\`，包括 Excel、元素 JSON 和截图模板，不提交仓库。

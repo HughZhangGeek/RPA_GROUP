@@ -25,6 +25,7 @@ DEFAULT_ADD_MEMBER_CONFIDENCE = 0.75
 DEFAULT_SETTINGS_POSITION = (1874, 66)
 DEFAULT_CONFIRM_POSITION = (700, 805)
 DEFAULT_ADD_MEMBER_POSITION = (1613, 243)
+DEFAULT_MEMBER_INPUT_POSITION = (678, 366)
 
 STATUS_SUCCESS = "添加成功"
 STATUS_MEMBER_ALREADY_IN = "成员已在群内"
@@ -216,7 +217,8 @@ class DingtalkGroupHandoffGuiBackend:
         settings_position: Tuple[int, int] = DEFAULT_SETTINGS_POSITION,
         confirm_position: Tuple[int, int] = DEFAULT_CONFIRM_POSITION,
         add_member_position: Tuple[int, int] = DEFAULT_ADD_MEMBER_POSITION,
-        step_delay_seconds: float = 0.8,
+        member_input_position: Tuple[int, int] = DEFAULT_MEMBER_INPUT_POSITION,
+        step_delay_seconds: float = 1.0,
         window_guard: Any = None,
     ) -> None:
         if gui_backend is None:
@@ -244,6 +246,7 @@ class DingtalkGroupHandoffGuiBackend:
         self._settings_position = settings_position
         self._confirm_position = confirm_position
         self._add_member_position = add_member_position
+        self._member_input_position = member_input_position
         self._step_delay_seconds = step_delay_seconds
         self._window_guard = window_guard or DingtalkWindowGuard()
         self._smoke_runner = DingtalkGroupHandoffSmokeRunner(
@@ -262,14 +265,20 @@ class DingtalkGroupHandoffGuiBackend:
             search_open_mode="shortcut",
             click_mode="position",
         )
-        self._smoke_runner.paste_search_text(group_name)
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
+
+        self._clipboard.copy(group_name)
+        self._delay_step()
+        self._gui.hotkey("ctrl", "a")
+        self._delay_step()
+        self._gui.hotkey("ctrl", "v")
+        self._delay_step()
 
         self._smoke_runner.click_collected_path(
             self._paths.select_search_type_group,
             click_mode="position",
         )
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
 
         if not self._click_image_if_present(
             self._paths.normal_group_image,
@@ -278,10 +287,10 @@ class DingtalkGroupHandoffGuiBackend:
         ):
             self.close_active_dialogs()
             return STATUS_GROUP_NOT_FOUND
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
 
         self._uia_driver.click_position(*self._settings_position)
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
 
         if not self._add_member_image.exists():
             self.close_active_dialogs()
@@ -293,13 +302,18 @@ class DingtalkGroupHandoffGuiBackend:
         ):
             self.close_active_dialogs()
             return STATUS_ADD_MEMBER_ENTRY_FAILED
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
 
+        self._uia_driver.click_position(*self._member_input_position)
+        self._delay_step()
         self._clipboard.copy(member_name)
+        self._delay_step()
         self._gui.hotkey("ctrl", "a")
+        self._delay_step()
         self._gui.hotkey("ctrl", "v")
+        self._delay_step()
         self._press("enter")
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
 
         if self._click_image_if_present(
             self._member_already_in_image,
@@ -315,14 +329,17 @@ class DingtalkGroupHandoffGuiBackend:
         except Exception:
             self.close_active_dialogs()
             return STATUS_CONFIRM_NOT_CLICKED
-        self._sleep(self._step_delay_seconds)
+        self._delay_step()
         return STATUS_SUCCESS
 
     def close_active_dialogs(self) -> None:
         if not self._capture_dingtalk_window():
             return
         self._press("esc")
-        self._sleep(0.2)
+        self._delay_step()
+
+    def _delay_step(self) -> None:
+        self._sleep(self._step_delay_seconds)
 
     def _capture_dingtalk_window(self) -> bool:
         try:
@@ -375,7 +392,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--save-every", type=int, default=1)
     parser.add_argument("--elements-dir", default=str(DEFAULT_ELEMENTS_DIR))
     parser.add_argument("--pause-before-start", type=float, default=3.0)
-    parser.add_argument("--step-delay", type=float, default=0.8)
+    parser.add_argument("--step-delay", type=float, default=1.0)
     args = parser.parse_args(argv)
 
     options = BatchOptions(
