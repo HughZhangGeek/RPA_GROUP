@@ -30,6 +30,9 @@ class FakeUiaDriver:
     def scroll_to_element(self, selector):
         self.calls.append(("scroll_to", selector))
 
+    def click_position(self, x, y):
+        self.calls.append(("click_position", x, y))
+
 
 class WecomCreateGroupRunnerTest(unittest.TestCase):
     def test_requires_test_mode_or_confirm_write_before_driver_calls(self):
@@ -207,3 +210,24 @@ class WecomCreateGroupRunnerTest(unittest.TestCase):
                 ("click", save_button),
             ],
         )
+
+    def test_executes_high_risk_position_click_fallback(self):
+        driver = FakeUiaDriver()
+        runner = WecomCreateGroupRunner(uia_driver=driver)
+
+        result = runner.run_template(
+            task_id="task-001",
+            payload={"test_mode": True, "group_name": "zh_test_服务群"},
+            commands=[
+                {
+                    "step_key": "select_search_type_group",
+                    "step_name": "切换搜索分类为群组",
+                    "action": "fallback_position_click",
+                    "target": {"type": "position", "x": 610, "y": 80},
+                    "risk_level": "high",
+                },
+            ],
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(driver.calls, [("click_position", 610, 80)])

@@ -71,6 +71,18 @@ class SequenceAutomationBackend:
         return self.controls.pop(0)
 
 
+class FakeUser32:
+    def __init__(self):
+        self.calls = []
+
+    def SetCursorPos(self, x, y):
+        self.calls.append(("set_cursor_pos", x, y))
+        return 1
+
+    def mouse_event(self, flags, dx, dy, data, extra_info):
+        self.calls.append(("mouse_event", flags, dx, dy, data, extra_info))
+
+
 class UiaAutomationDriverTest(unittest.TestCase):
     def test_finds_uia_element_with_window_scoped_selector(self):
         control = FakeControl()
@@ -219,6 +231,24 @@ class UiaAutomationDriverTest(unittest.TestCase):
 
         with self.assertRaisesRegex(AssertionError, "checked state mismatch"):
             driver.assert_checked({"window_title": "企业微信", "name": "姓名"}, expected=True)
+
+    def test_click_position_uses_windows_user32_mouse_events(self):
+        user32 = FakeUser32()
+        driver = UiaAutomationDriver(
+            automation_backend=FakeAutomationBackend(FakeControl()),
+            pointer_backend=user32,
+        )
+
+        driver.click_position(610, 80)
+
+        self.assertEqual(
+            user32.calls,
+            [
+                ("set_cursor_pos", 610, 80),
+                ("mouse_event", 0x0002, 0, 0, 0, 0),
+                ("mouse_event", 0x0004, 0, 0, 0, 0),
+            ],
+        )
 
 
 if __name__ == "__main__":

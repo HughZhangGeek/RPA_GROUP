@@ -1,7 +1,7 @@
 # RPA 第二阶段：Windows 元素采集与元素驱动执行
 
 状态：2026-06-24 第二阶段起步版
-适用范围：RPA_GROUP Windows Server 执行面、企微客户端元素采集、元素驱动点击/输入/等待
+适用范围：RPA_GROUP Windows Server 执行面、企微/钉钉客户端元素采集、元素驱动点击/输入/等待、必要时坐标兜底
 非目标：不修改旧线上 `RPA.py`，不提交 `.local/`、Cookie、token、webhook、二维码、日志、数据库、截图或真实上下文 JSON
 
 ## 1. 第二阶段理解
@@ -25,7 +25,7 @@ Windows Server 真实界面元素采集
 | 场景 | 推荐 | 原因 |
 | --- | --- | --- |
 | 采集 | `uiautomation` + Microsoft Inspect / Accessibility Insights | `uiautomation` 能直接从鼠标下元素读取 UIA 属性；Inspect/Accessibility Insights 用于人工校验控件的 Name、ControlType、AutomationId 和 Patterns。 |
-| 执行 | `uiautomation` 薄封装为本仓库 `UiaAutomationDriver` | Python/Windows 原生路线，依赖轻，支持 Windows Server，适合企微客户端和桌面控件。 |
+| 执行 | `uiautomation` 薄封装为本仓库 `UiaAutomationDriver` | Python/Windows 原生路线，依赖轻，支持 Windows Server，适合企微/钉钉客户端和桌面控件。 |
 | 调试 | Microsoft Inspect、Accessibility Insights、`python -m rpa_platform.worker.element_picker` | 官方工具看 UIA 树，仓库 CLI 输出可复用 JSON，方便把“看到的控件”变成“可执行动作”。 |
 | Web DOM | Playwright/CDP | 仅当目标是浏览器 DOM 时使用。企微客户端桌面 UI 不优先走 CDP；简道云/企微后台 Web 页仍优先 Playwright/接口链路。 |
 | 备选 | pywinauto | 成熟、BSD 许可证、支持 Win32/UIA，但本阶段先用更直接的 `uiautomation` 作为采集和执行主库；如遇控件兼容问题，再对 `pywinauto` 增加第二适配器。 |
@@ -109,6 +109,82 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 
 不用快捷键时，也可以保留原方式：鼠标悬停到目标控件上后直接运行不带 `--hotkey` 的命令，工具会立即采集当前鼠标位置下的元素。
 
+### 钉钉交接群：设置按钮采集
+
+当前钉钉交接群流程先以 `.local/elements/dingtalk_group_handoff/` 保存现场采集结果，不提交仓库。前置页面状态：
+
+- 已进入目标群：`帆软测试&简道云沟通群`。
+- 搜索弹层已验证可通过“群组”和“普通群”进入群。
+- 采集第一步目标是群页面右上角或侧边的“设置”按钮。
+
+Windows PowerShell 命令：
+
+```powershell
+conda activate RPA_GROUP
+cd C:\rpa_work\RPA_GROUP
+. C:\rpa_work\RPA_GROUP\.local\rpa-worker-env.ps1
+New-Item -ItemType Directory -Force .local\elements\dingtalk_group_handoff | Out-Null
+
+python -m rpa_platform.worker.element_picker --hotkey ctrl+shift+c --business-action dingtalk_group_handoff.group_settings_button --note "钉钉交接群详情页设置按钮" --output .local\elements\dingtalk_group_handoff\group_settings_button.json
+python -m json.tool .local\elements\dingtalk_group_handoff\group_settings_button.json
+```
+
+如果继续采集“添加成员”按钮，命令为：
+
+```powershell
+python -m rpa_platform.worker.element_picker --hotkey ctrl+shift+c --business-action dingtalk_group_handoff.add_member_button --note "add member" --output .local\elements\dingtalk_group_handoff\add_member_button.json
+python -m json.tool .local\elements\dingtalk_group_handoff\add_member_button.json
+```
+
+判断采集质量：
+
+- 如果 `target.name`、`target.control_type`、`target.automation_id` 或 `target.class_name` 能明确指向设置按钮，优先用 UIA 点击。
+- 如果采集到 `Chrome_RenderWidgetHostHWND`、`PaneControl` 或覆盖大范围 `bounding_rect_hint` 的面板，说明 UIA 没拿到真实按钮；保留 JSON 作为证据，再补一个坐标兜底命令。
+- 坐标兜底执行使用 `UiaAutomationDriver.click_position()`，底层调用 Windows `user32.SetCursorPos` 和 `mouse_event`，比 `pyautogui.click` 更适合当前 RDP 场景。
+
+坐标兜底命令形状：
+
+```json
+{
+  "step_key": "open_dingtalk_group_settings_by_position",
+  "step_name": "点击钉钉交接群设置按钮坐标兜底",
+  "action": "fallback_position_click",
+  "target": {"type": "position", "x": 0, "y": 0},
+  "risk_level": "high"
+}
+```
+
+把 `x/y` 替换为设置按钮中心点坐标。若只拿到了元素 JSON，可先参考 `fallback_position`；若 UIA 是大面板，必须人工确认按钮中心点后再填写。
+
+完整本地 smoke 链路：
+
+```powershell
+python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3
+```
+
+默认链路会依次执行：
+
+```text
+点击 group_search_input.json
+-> 剪贴板粘贴群名“帆软测试&简道云沟通群”
+-> 坐标点击 select_search_type_group.json 的 fallback_position
+-> 在 region=(386,90,880,348) 中以 confidence=0.75 识别 normal_group.png 并点击中心
+-> 点击 group_settings_button.json
+-> 点击 add_member_button.json
+```
+
+如果某个按钮 JSON 采到的是大面板，脚本会自动跳过这类大面板 UIA 并使用 JSON 里的 `fallback_position`。如果 `fallback_position` 也是大面板中心点，不是真实按钮中心点，用命令行覆盖：
+
+```powershell
+python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --settings-click-mode position --settings-position 1200,80 --add-member-click-mode position --add-member-position 1100,220
+```
+
+如果只想先跑到设置页，不点击“添加成员”：
+
+```powershell
+python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --stop-before-add-member
+```
+
 ## 5. 元素驱动动作
 
 当前已支持的动作：
@@ -121,6 +197,7 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 | `set_text` | 兼容旧命令，内部等价于 `input_text`。 |
 | `assert_checked` | 断言复选框/开关勾选状态。 |
 | `scroll_to_element` | 通过 ScrollItemPattern 滚动到目标元素。 |
+| `fallback_position_click` | 高风险坐标兜底，必须显式设置 `risk_level=high`。 |
 
 示例命令：
 
@@ -145,6 +222,13 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
     "step_name": "保存权限设置",
     "action": "click_element",
     "target": {"type": "uia", "window_title": "企业微信", "control_type": "Button", "name": "保存"}
+  },
+  {
+    "step_key": "open_dingtalk_group_settings_by_position",
+    "step_name": "点击钉钉交接群设置按钮坐标兜底",
+    "action": "fallback_position_click",
+    "target": {"type": "position", "x": 1200, "y": 80},
+    "risk_level": "high"
   }
 ]
 ```
@@ -152,7 +236,7 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 ## 6. 相关代码文件/模块
 
 - `rpa_platform/worker/element_picker.py`：鼠标下元素采集、元素配置生成。
-- `rpa_platform/worker/uia_driver.py`：`uiautomation` 执行适配器。
+- `rpa_platform/worker/uia_driver.py`：`uiautomation` 执行适配器，包含 Windows `user32` 坐标点击兜底。
 - `rpa_platform/worker/client_commands.py`：动作白名单和 UIA target 校验。
 - `rpa_platform/worker/wecom_client_runner.py`：元素驱动动作分派。
 - `tests/test_platform_element_picker.py`：元素配置和采集 CLI 测试。
@@ -167,3 +251,4 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 3. 从 `.local/elements/wecom_bind_permission/*.json` 提炼仓库内模板。
 4. 用 `UiaAutomationDriver` 在 test mode 下执行 `wait/assert/scroll`，先不点击保存。
 5. 确认只读动作稳定后，再把保存按钮点击纳入双门禁写入流程。
+6. 钉钉交接群继续采集 `group_settings_button.json`；如果 UIA 只拿到大面板，改用高风险坐标兜底命令打开设置页，再采集设置页内后续元素。

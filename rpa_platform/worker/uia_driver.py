@@ -2,6 +2,10 @@ import time
 from typing import Any, Dict, Optional, Protocol
 
 
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+
+
 class UiaDriver(Protocol):
     def find_element(self, selector: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         raise NotImplementedError
@@ -26,10 +30,14 @@ class UiaDriver(Protocol):
     def scroll_to_element(self, selector: Dict[str, Any]) -> None:
         raise NotImplementedError
 
+    def click_position(self, x: int, y: int) -> None:
+        raise NotImplementedError
+
 
 class UiaAutomationDriver:
-    def __init__(self, automation_backend: Any = None):
+    def __init__(self, automation_backend: Any = None, pointer_backend: Any = None):
         self._automation = automation_backend or self._load_uiautomation()
+        self._pointer_backend = pointer_backend
 
     def find_element(self, selector: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         control = self._resolve_control(selector, must_exist=False)
@@ -85,6 +93,13 @@ class UiaAutomationDriver:
             control.ScrollIntoView()
             return
         raise TypeError("UIA control does not support scroll into view: %s" % selector)
+
+    def click_position(self, x: int, y: int) -> None:
+        user32 = self._pointer_backend or self._load_user32()
+        if not user32.SetCursorPos(int(x), int(y)):
+            raise RuntimeError("SetCursorPos failed for position: (%s, %s)" % (x, y))
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def _resolve_control(
         self, selector: Dict[str, Any], must_exist: bool = True
@@ -172,3 +187,11 @@ class UiaAutomationDriver:
                 "uiautomation is required on Windows for UIA element execution"
             ) from exc
         return automation
+
+    def _load_user32(self) -> Any:
+        import ctypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is None or not hasattr(windll, "user32"):
+            raise RuntimeError("Windows user32 is required for position click execution")
+        return windll.user32
