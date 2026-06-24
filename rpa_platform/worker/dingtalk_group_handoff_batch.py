@@ -240,8 +240,9 @@ class DingtalkGroupHandoffGuiBackend:
         return STATUS_SUCCESS
 
     def close_active_dialogs(self) -> None:
-        self._press("esc")
-        self._sleep(0.2)
+        for _ in range(2):
+            self._press("esc")
+            self._sleep(0.2)
 
     def _click_image_if_present(
         self,

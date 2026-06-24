@@ -326,5 +326,6 @@ python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RP
 - 执行前保持钉钉窗口可见，并把 Mac 本机鼠标移出 RDP 窗口，避免干扰 RDP 内坐标点击。
 - 批量脚本默认使用 `ctrl+shift+f` 呼出搜索框，避免钉钉 UIA 点击返回成功但实际没有聚焦。
 - 批量脚本进入设置页后用 `.local\elements\dingtalk_group_handoff\add_member.png` 在 `region=(1441,50,455,576)` 内识别“添加成员”入口；识别失败会写 `添加成员入口失败`，保存当前行，然后继续下一行。
+- 群不存在、添加成员入口失败、成员已在群内等提前收口分支会连续发送两次 `Esc`，尽量关闭当前搜索/添加成员弹层后再处理下一行。
 - 搜索群名和成员名使用剪贴板粘贴；PowerShell 中文参数不稳定时，优先使用默认 `--member-name`。
 - 本地资产仍放在 `.local\elements\dingtalk_group_handoff\`，包括 Excel、元素 JSON 和截图模板，不提交仓库。

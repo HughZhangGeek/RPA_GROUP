@@ -13,6 +13,7 @@ from rpa_platform.worker.dingtalk_group_handoff_batch import (
     DingtalkGroupHandoffGuiBackend,
     DingtalkGroupHandoffBatchRunner,
     STATUS_ADD_MEMBER_ENTRY_FAILED,
+    STATUS_GROUP_NOT_FOUND,
     STATUS_SUCCESS,
 )
 
@@ -135,6 +136,29 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
             self.assertEqual(status, STATUS_ADD_MEMBER_ENTRY_FAILED)
             self.assertIn(("locate", "add_member.png", 0.75, (1441, 50, 455, 576)), calls)
             self.assertNotIn(("position_click", 700, 805), calls)
+
+    def test_gui_backend_closes_search_overlay_when_group_is_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            elements_dir = _write_handoff_files(Path(tmpdir))
+            calls = []
+            backend = DingtalkGroupHandoffGuiBackend(
+                elements_dir=elements_dir,
+                uia_driver=_FakeDriver(calls),
+                gui_backend=_FakeGui(
+                    calls,
+                    image_results={
+                        "normal_group.png": None,
+                    },
+                ),
+                clipboard_backend=_FakeClipboard(calls),
+                sleep=lambda _seconds: None,
+            )
+
+            status = backend.handoff_group("群A", "季钰杰")
+
+            self.assertEqual(status, STATUS_GROUP_NOT_FOUND)
+            self.assertEqual(calls.count(("press", "esc")), 2)
+            self.assertNotIn(("position_click", 1874, 66), calls)
 
     def test_gui_backend_clicks_add_member_image_when_detected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
