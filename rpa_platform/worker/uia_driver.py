@@ -102,9 +102,23 @@ class UiaAutomationDriver:
         exists = control.Exists(0, 0) if hasattr(control, "Exists") else True
         if exists:
             return control
+        fallback = self._resolve_fallback_control(selector)
+        if fallback is not None:
+            return fallback
         if must_exist:
             raise LookupError("UIA element not found: %s" % selector)
         return None
+
+    def _resolve_fallback_control(self, selector: Dict[str, Any]) -> Optional[Any]:
+        automation_id = selector.get("automation_id")
+        if not automation_id:
+            return None
+        control = self._automation.Control(
+            searchDepth=int(selector.get("search_depth", 8)),
+            AutomationId=automation_id,
+        )
+        exists = control.Exists(0, 0) if hasattr(control, "Exists") else True
+        return control if exists else None
 
     def _control_search_kwargs(self, selector: Dict[str, Any]) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"searchDepth": int(selector.get("search_depth", 8))}

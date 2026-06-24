@@ -57,6 +57,20 @@ class FakeAutomationBackend:
         return self.control
 
 
+class SequenceAutomationBackend:
+    def __init__(self, controls):
+        self.controls = list(controls)
+        self.calls = []
+
+    def WindowControl(self, **kwargs):
+        self.calls.append(("window", kwargs))
+        return "window-control"
+
+    def Control(self, **kwargs):
+        self.calls.append(("control", kwargs))
+        return self.controls.pop(0)
+
+
 class UiaAutomationDriverTest(unittest.TestCase):
     def test_finds_uia_element_with_window_scoped_selector(self):
         control = FakeControl()
@@ -107,6 +121,71 @@ class UiaAutomationDriverTest(unittest.TestCase):
         element = driver.find_element({"window_title": "企业微信", "name": "姓名"})
 
         self.assertEqual(element["bounding_rect"], [10, 20, 110, 60])
+
+    def test_falls_back_to_automation_id_when_strict_qt_selector_misses(self):
+        missing = FakeControl(exists=False)
+        found = FakeControl()
+        found.Name = ""
+        found.AutomationId = "titlebar_widget.search_bar.search_edit"
+        found.ClassName = "QLineEdit"
+        found.ControlTypeName = "EditControl"
+        backend = SequenceAutomationBackend([missing, found])
+        driver = UiaAutomationDriver(automation_backend=backend)
+
+        element = driver.find_element(
+            {
+                "automation_id": "titlebar_widget.search_bar.search_edit",
+                "bounding_rect_hint": [570, 5, 740, 33],
+                "class_name": "QLineEdit",
+                "control_type": "EditControl",
+                "name": "",
+                "type": "uia",
+                "window_title": "钉钉",
+            }
+        )
+
+        self.assertEqual(element["automation_id"], "titlebar_widget.search_bar.search_edit")
+        self.assertEqual(
+            backend.calls,
+            [
+                ("window", {"Name": "钉钉", "searchDepth": 1}),
+                (
+                    "control",
+                    {
+                        "searchFromControl": "window-control",
+                        "searchDepth": 8,
+                        "AutomationId": "titlebar_widget.search_bar.search_edit",
+                        "ClassName": "QLineEdit",
+                        "ControlType": "EditControl",
+                    },
+                ),
+                (
+                    "control",
+                    {
+                        "searchDepth": 8,
+                        "AutomationId": "titlebar_widget.search_bar.search_edit",
+                    },
+                ),
+            ],
+        )
+
+    def test_click_uses_automation_id_fallback_when_strict_qt_selector_misses(self):
+        missing = FakeControl(exists=False)
+        found = FakeControl()
+        found.AutomationId = "titlebar_widget.search_bar.search_edit"
+        backend = SequenceAutomationBackend([missing, found])
+        driver = UiaAutomationDriver(automation_backend=backend)
+
+        driver.click_element(
+            {
+                "automation_id": "titlebar_widget.search_bar.search_edit",
+                "class_name": "QLineEdit",
+                "control_type": "EditControl",
+                "window_title": "钉钉",
+            }
+        )
+
+        self.assertEqual(found.calls, [("exists",), ("click",)])
 
     def test_click_input_assert_and_scroll_use_uia_patterns(self):
         control = FakeControl(checked=True)
