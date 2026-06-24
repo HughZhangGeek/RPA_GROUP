@@ -93,6 +93,21 @@ class UiaAutomationDriverTest(unittest.TestCase):
             ],
         )
 
+    def test_finds_uia_element_with_rect_object(self):
+        class FakeRect:
+            left = 10
+            top = 20
+            right = 110
+            bottom = 60
+
+        control = FakeControl()
+        control.BoundingRectangle = FakeRect()
+        driver = UiaAutomationDriver(automation_backend=FakeAutomationBackend(control))
+
+        element = driver.find_element({"window_title": "企业微信", "name": "姓名"})
+
+        self.assertEqual(element["bounding_rect"], [10, 20, 110, 60])
+
     def test_click_input_assert_and_scroll_use_uia_patterns(self):
         control = FakeControl(checked=True)
         driver = UiaAutomationDriver(automation_backend=FakeAutomationBackend(control))

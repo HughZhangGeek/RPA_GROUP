@@ -100,6 +100,34 @@ class ElementPickerTest(unittest.TestCase):
         self.assertEqual(element["window_title"], "企业微信")
         self.assertEqual(element["hierarchy_path"], ["企业微信", "姓名"])
 
+    def test_collects_element_with_uia_rect_object(self):
+        class FakeRect:
+            left = 10
+            top = 20
+            right = 110
+            bottom = 60
+
+        class FakeControl:
+            Name = "搜索"
+            AutomationId = "search"
+            ClassName = "Edit"
+            ControlTypeName = "Edit"
+            BoundingRectangle = FakeRect()
+
+            def GetParentControl(self):
+                return None
+
+            def GetTopLevelControl(self):
+                return None
+
+        class FakeAutomation:
+            def ControlFromCursor(self):
+                return FakeControl()
+
+        element = collect_element_from_cursor(automation_backend=FakeAutomation())
+
+        self.assertEqual(element["bounding_rect"], [10, 20, 110, 60])
+
     def test_cli_writes_collected_action_config(self):
         with TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "element.json"

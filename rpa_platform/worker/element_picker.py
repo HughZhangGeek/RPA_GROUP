@@ -149,8 +149,22 @@ def _snapshot_control(control: Any) -> Dict[str, Any]:
         "control_type": str(getattr(control, "ControlTypeName", "")),
         "window_title": window_title,
         "hierarchy_path": hierarchy_path,
-        "bounding_rect": list(getattr(control, "BoundingRectangle", []) or []),
+        "bounding_rect": _rect_to_list(getattr(control, "BoundingRectangle", [])),
     }
+
+
+def _rect_to_list(rect: Any) -> List[int]:
+    if not rect:
+        return []
+    if isinstance(rect, (list, tuple)):
+        return list(rect)
+    lower_attrs = ("left", "top", "right", "bottom")
+    if all(hasattr(rect, attr) for attr in lower_attrs):
+        return [int(getattr(rect, attr)) for attr in lower_attrs]
+    upper_attrs = ("Left", "Top", "Right", "Bottom")
+    if all(hasattr(rect, attr) for attr in upper_attrs):
+        return [int(getattr(rect, attr)) for attr in upper_attrs]
+    return list(rect)
 
 
 def _top_window_title(control: Any) -> str:
