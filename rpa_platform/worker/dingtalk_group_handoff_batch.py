@@ -31,11 +31,60 @@ STATUS_MEMBER_ALREADY_IN = "成员已在群内"
 STATUS_GROUP_NOT_FOUND = "群不存在"
 STATUS_ADD_MEMBER_ENTRY_FAILED = "添加成员入口失败"
 STATUS_CONFIRM_NOT_CLICKED = "确认按钮未点击"
+STATUS_DINGTALK_WINDOW_NOT_CAPTURED = "钉钉窗口未捕获"
 
 
 class GroupHandoffBackend(Protocol):
     def handoff_group(self, group_name: str, member_name: str) -> str:
         raise NotImplementedError
+
+
+class DingtalkWindowNotCaptured(RuntimeError):
+    pass
+
+
+class DingtalkWindowGuard:
+    def __init__(
+        self,
+        window_backend: Any = None,
+        title_keywords: Tuple[str, ...] = ("钉钉", "DingTalk"),
+    ) -> None:
+        if window_backend is None:
+            import pygetwindow  # type: ignore
+
+            window_backend = pygetwindow
+        self._window_backend = window_backend
+        self._title_keywords = title_keywords
+
+    def capture(self) -> str:
+        windows = []
+        seen = set()
+        for keyword in self._title_keywords:
+            try:
+                found_windows = self._window_backend.getWindowsWithTitle(keyword)
+            except Exception as exc:
+                raise DingtalkWindowNotCaptured("查询钉钉窗口失败：%s" % _short_error(exc)) from exc
+            for window in found_windows:
+                marker = id(window)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                windows.append(window)
+
+        for window in windows:
+            title = str(getattr(window, "title", "") or "").strip()
+            if title and not _title_matches(title, self._title_keywords):
+                continue
+            try:
+                if bool(getattr(window, "isMinimized", False)) and hasattr(window, "restore"):
+                    window.restore()
+                if hasattr(window, "activate"):
+                    window.activate()
+            except Exception as exc:
+                raise DingtalkWindowNotCaptured("激活钉钉窗口失败：%s" % _short_error(exc)) from exc
+            return title or "钉钉"
+
+        raise DingtalkWindowNotCaptured("未找到标题包含 钉钉/DingTalk 的窗口")
 
 
 @dataclass(frozen=True)
@@ -143,6 +192,7 @@ class DingtalkGroupHandoffGuiBackend:
         confirm_position: Tuple[int, int] = DEFAULT_CONFIRM_POSITION,
         add_member_position: Tuple[int, int] = DEFAULT_ADD_MEMBER_POSITION,
         step_delay_seconds: float = 0.8,
+        window_guard: Any = None,
     ) -> None:
         if gui_backend is None:
             import pyautogui  # type: ignore
@@ -170,6 +220,7 @@ class DingtalkGroupHandoffGuiBackend:
         self._confirm_position = confirm_position
         self._add_member_position = add_member_position
         self._step_delay_seconds = step_delay_seconds
+        self._window_guard = window_guard or DingtalkWindowGuard()
         self._smoke_runner = DingtalkGroupHandoffSmokeRunner(
             uia_driver=self._uia_driver,
             gui_backend=self._gui,
@@ -178,6 +229,9 @@ class DingtalkGroupHandoffGuiBackend:
         )
 
     def handoff_group(self, group_name: str, member_name: str) -> str:
+        if not self._capture_dingtalk_window():
+            return STATUS_DINGTALK_WINDOW_NOT_CAPTURED
+
         self._smoke_runner.open_search(
             self._paths.group_search_input,
             search_open_mode="shortcut",
@@ -240,9 +294,17 @@ class DingtalkGroupHandoffGuiBackend:
         return STATUS_SUCCESS
 
     def close_active_dialogs(self) -> None:
-        for _ in range(2):
-            self._press("esc")
-            self._sleep(0.2)
+        if not self._capture_dingtalk_window():
+            return
+        self._press("esc")
+        self._sleep(0.2)
+
+    def _capture_dingtalk_window(self) -> bool:
+        try:
+            self._window_guard.capture()
+            return True
+        except DingtalkWindowNotCaptured:
+            return False
 
     def _click_image_if_present(
         self,
@@ -311,9 +373,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "mouse out of the RDP window." % args.pause_before_start
             )
             time.sleep(args.pause_before_start)
+        window_guard = DingtalkWindowGuard()
+        try:
+            window_title = window_guard.capture()
+        except DingtalkWindowNotCaptured as exc:
+            print("DingTalk window capture failed: %s" % exc)
+            return 2
+        print("Captured DingTalk window: %s" % window_title)
         backend = DingtalkGroupHandoffGuiBackend(
             elements_dir=Path(args.elements_dir),
             step_delay_seconds=args.step_delay,
+            window_guard=window_guard,
         )
 
     result = DingtalkGroupHandoffBatchRunner(backend).run(options)
@@ -346,6 +416,7 @@ def _is_failure_status(status: str) -> bool:
     return status.startswith("异常：") or status in {
         STATUS_ADD_MEMBER_ENTRY_FAILED,
         STATUS_CONFIRM_NOT_CLICKED,
+        STATUS_DINGTALK_WINDOW_NOT_CAPTURED,
     }
 
 
@@ -366,6 +437,7 @@ def _validate_local_assets(elements_dir: Path) -> None:
         paths.select_search_type_group,
         paths.normal_group_image,
         paths.add_member_button,
+        elements_dir / "add_member.png",
         elements_dir / "member_already_in.png",
     ]
     missing = [str(path) for path in required if not path.exists()]
@@ -379,6 +451,11 @@ def _box_center(box: Any) -> Tuple[int, int]:
     width = int(getattr(box, "width", box[2] if isinstance(box, (list, tuple)) else 0))
     height = int(getattr(box, "height", box[3] if isinstance(box, (list, tuple)) else 0))
     return int(left + width / 2), int(top + height / 2)
+
+
+def _title_matches(title: str, keywords: Tuple[str, ...]) -> bool:
+    title_lower = title.lower()
+    return any(keyword.lower() in title_lower for keyword in keywords)
 
 
 if __name__ == "__main__":
