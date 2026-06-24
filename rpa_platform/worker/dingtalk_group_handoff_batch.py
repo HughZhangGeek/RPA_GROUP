@@ -171,7 +171,10 @@ class DingtalkGroupHandoffGuiBackend:
         )
 
     def handoff_group(self, group_name: str, member_name: str) -> str:
-        self._smoke_runner.click_collected_path(self._paths.group_search_input)
+        self._smoke_runner.click_collected_path(
+            self._paths.group_search_input,
+            click_mode="position",
+        )
         self._smoke_runner.paste_search_text(group_name)
         self._sleep(self._step_delay_seconds)
 

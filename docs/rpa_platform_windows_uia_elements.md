@@ -185,6 +185,12 @@ python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --se
 python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --stop-before-add-member
 ```
 
+如果搜索框 UIA 点击在 RDP 里没有实际聚焦，强制用 `group_search_input.json` 的坐标兜底点击搜索框：
+
+```powershell
+python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 5 --step-delay 2 --search-click-mode position --stop-before-add-member
+```
+
 ## 5. 元素驱动动作
 
 当前已支持的动作：
@@ -316,5 +322,6 @@ python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RP
 注意：
 
 - 执行前保持钉钉窗口可见，并把 Mac 本机鼠标移出 RDP 窗口，避免干扰 RDP 内坐标点击。
+- 批量脚本默认使用坐标兜底点击搜索框，避免钉钉 UIA 点击返回成功但实际没有聚焦。
 - 搜索群名和成员名使用剪贴板粘贴；PowerShell 中文参数不稳定时，优先使用默认 `--member-name`。
 - 本地资产仍放在 `.local\elements\dingtalk_group_handoff\`，包括 Excel、元素 JSON 和截图模板，不提交仓库。

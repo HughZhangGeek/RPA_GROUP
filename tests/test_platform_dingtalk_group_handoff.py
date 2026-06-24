@@ -73,6 +73,27 @@ class DingtalkGroupHandoffSmokeTest(unittest.TestCase):
 
         self.assertEqual(calls, [("position_click", 1200, 80)])
 
+    def test_can_force_search_input_to_position_click_when_uia_click_is_noop(self):
+        with TemporaryDirectory() as tmpdir:
+            paths = _write_handoff_files(Path(tmpdir))
+            calls = []
+            runner = DingtalkGroupHandoffSmokeRunner(
+                uia_driver=_FakeDriver(calls),
+                gui_backend=_FakeGui(calls),
+                clipboard_backend=_FakeClipboard(calls),
+                sleep=lambda _seconds: None,
+            )
+
+            runner.run(
+                group_name="帆软测试&简道云沟通群",
+                paths=paths,
+                search_click_mode="position",
+                step_delay_seconds=0,
+                stop_before_add_member=True,
+            )
+
+            self.assertEqual(calls[0], ("position_click", 650, 20))
+
 
 class _FakeDriver:
     def __init__(self, calls):

@@ -52,6 +52,7 @@ class DingtalkGroupHandoffSmokeRunner:
         paths: HandoffElementPaths,
         search_region: Tuple[int, int, int, int] = DEFAULT_SEARCH_REGION,
         normal_group_confidence: float = DEFAULT_NORMAL_GROUP_CONFIDENCE,
+        search_click_mode: str = "auto",
         settings_click_mode: str = "auto",
         add_member_click_mode: str = "auto",
         settings_position: Optional[Tuple[int, int]] = None,
@@ -59,7 +60,7 @@ class DingtalkGroupHandoffSmokeRunner:
         step_delay_seconds: float = 0.8,
         stop_before_add_member: bool = False,
     ) -> None:
-        self.click_collected_path(paths.group_search_input)
+        self.click_collected_path(paths.group_search_input, click_mode=search_click_mode)
         self.paste_search_text(group_name)
         self._sleep(step_delay_seconds)
 
@@ -160,6 +161,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--group-name", default=DEFAULT_GROUP_NAME)
     parser.add_argument("--search-region", default=_format_region(DEFAULT_SEARCH_REGION))
     parser.add_argument("--normal-group-confidence", type=float, default=DEFAULT_NORMAL_GROUP_CONFIDENCE)
+    parser.add_argument("--search-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--settings-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--add-member-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--settings-position", default="")
@@ -190,6 +192,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         paths=paths,
         search_region=_parse_region(args.search_region),
         normal_group_confidence=args.normal_group_confidence,
+        search_click_mode=args.search_click_mode,
         settings_click_mode=args.settings_click_mode,
         add_member_click_mode=args.add_member_click_mode,
         settings_position=_parse_optional_position(args.settings_position),
