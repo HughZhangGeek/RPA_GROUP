@@ -59,27 +59,83 @@ def collect_element_from_cursor(automation_backend: Any = None) -> Dict[str, Any
     return _snapshot_control(control)
 
 
-def main(argv: List[str] = None, automation_backend: Any = None) -> int:
+def main(
+    argv: List[str] = None,
+    automation_backend: Any = None,
+    keyboard_backend: Any = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Collect a Windows UIA element under cursor")
     parser.add_argument("--business-action", required=True)
     parser.add_argument("--note", default="")
     parser.add_argument("--collected-at", default="")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--hotkey", default="")
     args = parser.parse_args(argv)
 
+    if args.hotkey:
+        return run_hotkey_capture(
+            business_action=args.business_action,
+            output=args.output,
+            hotkey=args.hotkey,
+            note=args.note,
+            collected_at=args.collected_at,
+            automation_backend=automation_backend,
+            keyboard_backend=keyboard_backend,
+        )
+
+    collect_and_write_action_config(
+        business_action=args.business_action,
+        output=args.output,
+        note=args.note,
+        collected_at=args.collected_at,
+        automation_backend=automation_backend,
+    )
+    return 0
+
+
+def collect_and_write_action_config(
+    business_action: str,
+    output: str,
+    note: str = "",
+    collected_at: str = "",
+    automation_backend: Any = None,
+) -> Dict[str, Any]:
     element = collect_element_from_cursor(automation_backend=automation_backend)
     config = build_element_action_config(
-        business_action=args.business_action,
+        business_action=business_action,
         element=element,
-        collected_at=args.collected_at,
-        note=args.note,
+        collected_at=collected_at,
+        note=note,
     )
-    output_path = Path(args.output)
+    output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    return config
+
+
+def run_hotkey_capture(
+    business_action: str,
+    output: str,
+    hotkey: str,
+    note: str = "",
+    collected_at: str = "",
+    automation_backend: Any = None,
+    keyboard_backend: Any = None,
+) -> int:
+    keyboard = keyboard_backend or _load_keyboard()
+    print("Move cursor to target element, then press %s to collect." % hotkey)
+    keyboard.wait(hotkey)
+    collect_and_write_action_config(
+        business_action=business_action,
+        output=output,
+        note=note,
+        collected_at=collected_at,
+        automation_backend=automation_backend,
+    )
+    print("Element collected: %s" % output)
     return 0
 
 
@@ -128,6 +184,14 @@ def _load_uiautomation() -> Any:
     except ImportError as exc:
         raise RuntimeError("uiautomation is required on Windows for element collection") from exc
     return automation
+
+
+def _load_keyboard() -> Any:
+    try:
+        import keyboard  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("keyboard is required on Windows for hotkey element collection") from exc
+    return keyboard
 
 
 if __name__ == "__main__":

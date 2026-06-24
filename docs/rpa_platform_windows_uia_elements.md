@@ -85,13 +85,13 @@ python -m pip install -r requirements.txt
 New-Item -ItemType Directory -Force .local\elements\wecom_bind_permission | Out-Null
 ```
 
-打开企微客户端并进入权限设置页面后，把鼠标悬停到目标控件上，逐个执行：
+打开企微客户端并进入权限设置页面后，推荐使用快捷键采集。每条命令启动后会等待热键；把鼠标移动到目标控件上，按 `Ctrl+Alt+C`，采集完成后命令自动退出。
 
 ```powershell
-python -m rpa_platform.worker.element_picker --business-action wecom_bind.permission.org_info --note "组织架构信息节点" --output .local\elements\wecom_bind_permission\org_info.json
-python -m rpa_platform.worker.element_picker --business-action wecom_bind.permission.name --note "姓名权限复选框" --output .local\elements\wecom_bind_permission\name.json
-python -m rpa_platform.worker.element_picker --business-action wecom_bind.permission.department --note "部门名权限复选框" --output .local\elements\wecom_bind_permission\department.json
-python -m rpa_platform.worker.element_picker --business-action wecom_bind.permission.save --note "权限设置保存按钮" --output .local\elements\wecom_bind_permission\save.json
+python -m rpa_platform.worker.element_picker --hotkey ctrl+alt+c --business-action wecom_bind.permission.org_info --note "组织架构信息节点" --output .local\elements\wecom_bind_permission\org_info.json
+python -m rpa_platform.worker.element_picker --hotkey ctrl+alt+c --business-action wecom_bind.permission.name --note "姓名权限复选框" --output .local\elements\wecom_bind_permission\name.json
+python -m rpa_platform.worker.element_picker --hotkey ctrl+alt+c --business-action wecom_bind.permission.department --note "部门名权限复选框" --output .local\elements\wecom_bind_permission\department.json
+python -m rpa_platform.worker.element_picker --hotkey ctrl+alt+c --business-action wecom_bind.permission.save --note "权限设置保存按钮" --output .local\elements\wecom_bind_permission\save.json
 ```
 
 只读检查 JSON：
@@ -105,6 +105,9 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 - 采集输出先留在 `.local/`，不要提交。
 - 如果 `name` 为空、`control_type` 不稳定，先用 Microsoft Inspect 或 Accessibility Insights 复核 UIA 树。
 - 如果企微客户端基于 Chromium/Electron 且 UIA 树缺失，可尝试用启动参数 `--force-renderer-accessibility` 让可访问性树更完整；生产执行前需确认不影响企微客户端稳定性。
+- 如果快捷键与系统或远程桌面冲突，可以换成 `--hotkey ctrl+shift+f8` 之类不常用的组合。
+
+不用快捷键时，也可以保留原方式：鼠标悬停到目标控件上后直接运行不带 `--hotkey` 的命令，工具会立即采集当前鼠标位置下的元素。
 
 ## 5. 元素驱动动作
 

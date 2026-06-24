@@ -121,6 +121,30 @@ class ElementPickerTest(unittest.TestCase):
             self.assertIn('"business_action": "wecom_bind.permission.name"', content)
             self.assertIn('"name": "姓名"', content)
 
+    def test_cli_hotkey_mode_collects_when_shortcut_is_pressed(self):
+        with TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "element.json"
+            keyboard = _FakeKeyboardForCli()
+
+            status = main(
+                [
+                    "--business-action",
+                    "wecom_bind.permission.name",
+                    "--output",
+                    str(output),
+                    "--hotkey",
+                    "ctrl+alt+c",
+                ],
+                automation_backend=_FakeAutomationForCli(),
+                keyboard_backend=keyboard,
+            )
+
+            self.assertEqual(status, 0)
+            self.assertEqual(keyboard.waited_hotkey, "ctrl+alt+c")
+            content = output.read_text(encoding="utf-8")
+            self.assertIn('"business_action": "wecom_bind.permission.name"', content)
+            self.assertIn('"name": "姓名"', content)
+
 
 class _FakeAutomationForCli:
     def ControlFromCursor(self):
@@ -138,3 +162,11 @@ class _FakeAutomationForCli:
                 return None
 
         return FakeControl()
+
+
+class _FakeKeyboardForCli:
+    def __init__(self):
+        self.waited_hotkey = ""
+
+    def wait(self, hotkey):
+        self.waited_hotkey = hotkey
