@@ -43,8 +43,8 @@ class DingtalkGroupHandoffSmokeTest(unittest.TestCase):
                         (386, 90, 880, 348),
                     ),
                     ("position_click", 638, 124),
-                    ("uia_click", "settings_button"),
-                    ("uia_click", "add_member_button"),
+                    ("position_click", 1874, 66),
+                    ("position_click", 1613, 243),
                 ],
             )
 

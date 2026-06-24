@@ -12,6 +12,8 @@ DEFAULT_ELEMENTS_DIR = Path(".local") / "elements" / "dingtalk_group_handoff"
 DEFAULT_GROUP_NAME = "帆软测试&简道云沟通群"
 DEFAULT_SEARCH_REGION = (386, 90, 880, 348)
 DEFAULT_NORMAL_GROUP_CONFIDENCE = 0.75
+DEFAULT_SETTINGS_POSITION = (1874, 66)
+DEFAULT_ADD_MEMBER_POSITION = (1613, 243)
 
 
 @dataclass(frozen=True)
@@ -56,8 +58,8 @@ class DingtalkGroupHandoffSmokeRunner:
         search_click_mode: str = "auto",
         settings_click_mode: str = "auto",
         add_member_click_mode: str = "auto",
-        settings_position: Optional[Tuple[int, int]] = None,
-        add_member_position: Optional[Tuple[int, int]] = None,
+        settings_position: Optional[Tuple[int, int]] = DEFAULT_SETTINGS_POSITION,
+        add_member_position: Optional[Tuple[int, int]] = DEFAULT_ADD_MEMBER_POSITION,
         step_delay_seconds: float = 0.8,
         stop_before_add_member: bool = False,
     ) -> None:
@@ -180,8 +182,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--search-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--settings-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--add-member-click-mode", choices=("auto", "uia", "position"), default="auto")
-    parser.add_argument("--settings-position", default="")
-    parser.add_argument("--add-member-position", default="")
+    parser.add_argument("--settings-position", default=_format_position(DEFAULT_SETTINGS_POSITION))
+    parser.add_argument("--add-member-position", default=_format_position(DEFAULT_ADD_MEMBER_POSITION))
     parser.add_argument("--pause-before-start", type=float, default=3.0)
     parser.add_argument("--step-delay", type=float, default=0.8)
     parser.add_argument("--stop-before-add-member", action="store_true")
@@ -290,6 +292,10 @@ def _parse_int_csv(raw: str, expected: int, label: str) -> Tuple[int, ...]:
 
 def _format_region(region: Tuple[int, int, int, int]) -> str:
     return ",".join(str(value) for value in region)
+
+
+def _format_position(position: Tuple[int, int]) -> str:
+    return ",".join(str(value) for value in position)
 
 
 if __name__ == "__main__":

@@ -116,6 +116,7 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 - 已进入目标群：`帆软测试&简道云沟通群`。
 - 搜索弹层已验证可通过“群组”和“普通群”进入群。
 - 采集第一步目标是群页面右上角或侧边的“设置”按钮。
+- 现场已确认：设置按钮固定坐标为 `(1874,66)`；“添加成员”按钮固定坐标为 `(1613,243)`。当前 smoke 和批量脚本默认使用这两个坐标，避免钉钉元素点击失效。
 
 Windows PowerShell 命令：
 
@@ -176,7 +177,7 @@ python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3
 如果某个按钮 JSON 采到的是大面板，脚本会自动跳过这类大面板 UIA 并使用 JSON 里的 `fallback_position`。如果 `fallback_position` 也是大面板中心点，不是真实按钮中心点，用命令行覆盖：
 
 ```powershell
-python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --settings-click-mode position --settings-position 1200,80 --add-member-click-mode position --add-member-position 1100,220
+python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --settings-click-mode position --settings-position 1874,66 --add-member-click-mode position --add-member-position 1613,243
 ```
 
 如果只想先跑到设置页，不点击“添加成员”：
