@@ -1,6 +1,6 @@
 # RPA 平台 Windows WebSocket 部署 Runbook
 
-状态：2026-06-20 阶段性验证版
+状态：2026-06-24 第一里程碑完成版
 适用范围：Windows RPA 执行服务反连 jdycsm 控制面
 非目标：不部署旧 `RPA.py`，不开放 Windows 入站业务接口，不把 Cookie 或密钥明文上传到 jdycsm
 
@@ -17,7 +17,28 @@
 -> WebSocket 回传进度和结果
 ```
 
-Windows 不暴露公网 HTTP 服务。所有业务入口统一到 jdycsm，Windows 只主动建立 WebSocket 出站连接。
+Windows 不暴露公网 HTTP 服务。所有业务入口统一到 jdycsm，Windows 只主动建立 WebSocket 出站连接。第一里程碑已完成：JDY 推送触发、CSM_C360 控制面派发、Windows worker 只读预检、登录恢复、无人值守真实写入、结果回写和流程推进链路已跑通。
+
+## 1.1 第一里程碑完成口径
+
+截至 2026-06-24，第一里程碑完成范围如下：
+
+- CSM_C360 作为控制面接收 JDY webhook，入库 `rpa_tasks` 并追加 `rpa_task_events`。
+- Windows worker 通过 `C360_BASE_URL` 主动连接 `wss://jdycsm.sre.jdydevelop.com/csm-c360-api/v1/rpa/workers/ws`。
+- `RPA_WORKER_SIMULATE=false` 时，`wecom_bind_service` 走真实企微绑定 handler。
+- 企业身份检索优先使用 CorpID；CorpID 唯一命中时不再校验推送企业名和 JDY 企业名是否一致。没有 CorpID 时按企业名称唯一匹配。
+- `userid` 缺失或为空时，不再中断；使用简道云后台默认绑定用户继续写入，并记录 `userid_source=default`。payload 显式提供 `userid` 时记录 `userid_source=payload` 并按该用户处理。
+- 真实写入仍必须同时满足 Windows 本机 `RPA_WORKER_ALLOW_UNATTENDED_WRITE=true` 和 CSM dispatch payload `unattended_write=true` 或 `confirm_write=true`。
+- 企微权限写入会勾选组织架构信息、姓名、部门名，并递归勾选包含目标权限的父级节点。
+- WebSocket 长任务中途被服务器或网络关闭时，worker 会通过 HTTP `/v1/rpa/workers/messages` 兜底回传 `task.accepted`、`task.progress`、`task.completed`；兜底成功后不再中断后续执行。
+- CSM_C360 收到成功结果后回写 JDY 字段，并对成功任务推进流程。
+
+第一里程碑不包含：
+
+- 旧线上 `RPA.py` 改造、导入、重启或部署。
+- 多 worker 并发执行同一真实写入能力。
+- 面向业务人员的 RPA 任务管理 UI。
+- 企微客户端建群/解散/群发消息生产化。
 
 ## 2. 前置条件
 
@@ -574,7 +595,7 @@ EVENT_HISTORY_STORED
 
 ### 6.3.5 企微绑定无人值守真实写入
 
-状态：2026-06-20 已完成本地 fake transport 单元测试覆盖；真实写入验证必须等待用户在当前线程明确确认新的目标企业后再执行。历史成功样本已完成，不得重复执行同一单。
+状态：2026-06-24 第一里程碑已完成。真实链路已验证到 `real_write_completed`、`task.completed status=succeeded`、`jdy.writeback.succeeded` 和 `jdy.flow_task.submit.succeeded`。历史成功样本不得重复执行同一单。
 
 Windows worker 启动前必须加载本机环境：
 
@@ -610,6 +631,41 @@ $env:RPA_WORKER_ALLOW_UNATTENDED_WRITE="true"
 ```
 
 若 `RPA_WORKER_ALLOW_UNATTENDED_WRITE` 未开启，或 payload 未带 `unattended_write=true` / `confirm_write=true`，worker 继续停在只读预检结果：`ready_for_real_bind` / `manual_confirm_required` / `manual_action_required`，不写 JDY、不提交企微线上订单。
+
+CSM_C360 JDY webhook 入口当前会对 RPA 绑定任务强制下发：
+
+```json
+{
+  "unattended_write": true,
+  "confirm_write": true
+}
+```
+
+控制面仍只白名单透传上述写入授权字段，不 broad pass-through 全部表单字段。
+
+`userid` 规则：
+
+- payload 有非空 `userid`：使用该 userid 做 owner 检查、绑定、写入，结果记录 `userid_source=payload`。
+- payload 缺失或为空：不把空值下发覆盖默认值，执行面按简道云后台默认绑定用户继续，结果记录 `userid_source=default`。
+- 如果执行面无法取得默认绑定用户，返回中文 `error_msg` 和机器可读 `reason`，不进入真实写入。
+
+企业检索规则：
+
+- `corpid` 有值：优先按 CorpID 检索 JDY 企业。唯一命中则继续，不校验推送企业名称和 JDY 企业名是否一致。
+- CorpID 未命中：返回 `根据 CorpID 未检索到企业，请检查 CorpID 是否填写正确`。
+- CorpID 多命中：返回 `根据 CorpID 检索到多家企业，请联系管理员处理企业数据`。
+- `corpid` 为空但企业名称有值：按企业名称检索。唯一命中继续；0 个或多个分别返回中文业务错误。
+- CorpID 和企业名称都为空：返回 `请填写 CorpID 或企业名称后重试`。
+
+企微权限规则：
+
+```text
+310000 组织架构信息 = true
+10006 姓名 = true
+10010 部门名 = true
+```
+
+权限树中包含目标权限的父节点也会被置为 `b_check=true`，避免后台页面只显示叶子权限但父级开关未打开。
 
 若无人值守写入已开启且只读预检遇到登录态失效，worker 会在同一次任务中进入登录恢复编排：
 
@@ -669,6 +725,13 @@ result.submit_result.status=success
 
 结果和本机 verbose 输出必须保持脱敏，不得包含 token、encoding_aes_key、Cookie、Webhook、二维码、真实上下文 JSON 或本地日志正文。
 
+长任务回传策略：
+
+- worker 仍优先通过 WebSocket 发送 `task.accepted`、`task.progress`、`task.completed`。
+- 每条任务消息同时通过 HTTP `POST /v1/rpa/workers/messages` 兜底上报。
+- 如果 WebSocket 写入失败但 HTTP 兜底成功，worker 继续执行当前任务，不因为 `Cannot write to closing transport` 中断真实写入。
+- 如果 WebSocket 和 HTTP 兜底都失败，worker 才让当前连接周期失败并等待常驻重连。
+
 重复和并发保护：
 
 - worker 会使用 `.local/wecom-bind-write.lock` 防止多个真实写入并发执行。
@@ -701,12 +764,13 @@ python -m rpa_platform.worker.c360_worker --verbose
 
 ### 6.4 断线恢复验证
 
-1. 下发一条 fake 任务。
-2. 在 running 中断开 Windows worker 网络或停止进程。
-3. jdycsm 将任务置为 `worker_offline` 或 `waiting_worker`。
-4. 重启 worker。
-5. worker.register 上报 `current_task` 或本地最近任务结果。
-6. jdycsm reconcile 后不重复执行真实写入。
+第一里程碑采用消息兜底 + 人工重排策略：
+
+1. worker 对每条任务消息执行 WebSocket + HTTP 双通道上报。
+2. WebSocket 中途关闭但 HTTP 兜底成功时，当前任务继续执行到完成。
+3. 如果连接异常发生在 handler 内部且任务没有完成，CSM 任务会停在 `running`，事件表可看到最后一条 progress。
+4. 重新拉取包含兜底不中断修复的 worker 后，可由管理员对未完成任务做 guarded requeue：仅当 `status NOT IN ('succeeded','failed')` 且 `finished_at IS NULL` 时重置为 `queued`。
+5. 重新派发前必须确认 Windows 本地没有同一 `task_id` 的成功 context；如果已有成功 context，应补发 `task.completed`，不得重新真实写入。
 
 ### 6.5 Windows 调试验证
 

@@ -1,6 +1,6 @@
 # RPA 平台 Windows WebSocket 执行协议草案
 
-状态：2026-06-18 草案
+状态：2026-06-24 第一里程碑完成版
 适用范围：`rpa_platform/` 新平台化路径、jdycsm 控制面、Windows RPA 执行面
 非目标：不改旧 `RPA.py`，不让外部系统直连 Windows，不上传 Cookie 或业务密钥明文
 
@@ -134,21 +134,39 @@ worker 回传：
 {"type": "task.completed", "task_id": "task_001", "status": "succeeded", "result": {"simulated": true, "handler": "wecom_bind_service"}}
 ```
 
-企微后台登录态失效时，worker 不应把任务伪装成成功。第一版恢复骨架使用只读预检结果驱动状态：
+企微后台登录态失效时，worker 不应把任务伪装成业务成功。当前 CSM_C360 最小协议要求 `task.completed.status` 只能是 `succeeded` 或 `failed`；业务状态必须放在 `result.status`、`result.reason` 和 progress 事件中。
 
 ```json
 {"type": "task.progress", "task_id": "task_001", "status": "waiting_login", "message": "wecom admin QR notification sent"}
-{"type": "task.completed", "task_id": "task_001", "status": "manual_action_required", "result": {"reason": "wecom_login_not_restored", "manual_action": "scan_wecom_admin_qr"}}
+{"type": "task.completed", "task_id": "task_001", "status": "succeeded", "result": {"status": "manual_action_required", "reason": "wecom_login_not_restored", "manual_action": "scan_wecom_admin_qr"}}
 ```
 
 管理员扫码并由企微后台只读接口确认登录态恢复后，worker 重新执行只读预检。预检通过但尚未真实写入时，结果应停在待继续/待人工确认状态：
 
 ```json
-{"type": "task.completed", "task_id": "task_001", "status": "ready_for_real_bind", "result": {"reason": "ready_for_confirm_write"}}
-{"type": "task.completed", "task_id": "task_002", "status": "manual_confirm_required", "result": {"reason": "jdy_corp_name_mismatch"}}
+{"type": "task.completed", "task_id": "task_001", "status": "succeeded", "result": {"status": "ready_for_real_bind", "reason": "ready_for_confirm_write"}}
+{"type": "task.completed", "task_id": "task_002", "status": "succeeded", "result": {"status": "manual_confirm_required", "reason": "jdy_corp_name_mismatch"}}
 ```
 
 上述结果不得包含 Cookie、Token、Webhook、二维码原始内容或完整 CorpID。
+
+真实写入成功时：
+
+```json
+{"type": "task.progress", "task_id": "task_003", "status": "real_write_started"}
+{"type": "task.progress", "task_id": "task_003", "status": "real_write_completed"}
+{"type": "task.completed", "task_id": "task_003", "status": "succeeded", "result": {"status": "success", "wecom": {"auditorder_status": 5}}}
+```
+
+如果 WebSocket 长连接已经关闭，worker 会对任务消息使用 HTTP 兜底入口：
+
+```text
+POST /v1/rpa/workers/messages
+X-RPA-Worker-Token: <本机环境变量>
+X-RPA-Worker-Id: <worker_id>
+```
+
+HTTP 兜底成功时，worker 不因 WebSocket 写入失败中断当前任务；控制面仍按同一 worker 消息协议解析、落事件、更新任务和触发回写。
 
 ### 5.1 worker.register
 

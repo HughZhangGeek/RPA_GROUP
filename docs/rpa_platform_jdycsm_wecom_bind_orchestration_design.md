@@ -1,19 +1,22 @@
 # jdycsm RPA 任务编排与企微绑定自动化设计
 
-状态：2026-06-18 草案
+状态：2026-06-24 第一里程碑完成版
 适用范围：jdycsm 控制面、RPA_GROUP Windows WebSocket Worker、通用 RPA 任务编排、企微绑定服务、企微客户端 RPA、简道云回写和流程待办处理
 非目标：不改旧 `RPA.py`，不让 Windows Server 暴露公网业务接口，不把简道云表单字段、企微机器人 webhook、Cookie 或密钥写死在任何任务主链路中
 
 ## 1. 背景
 
-Windows Server 真实企微绑定链路已经验证通过。当前已通过脚本完成多单真实写入，链路包括：
+Windows Server 真实企微绑定链路已经验证通过。第一里程碑已从单机脚本推进到 CSM_C360 控制面和 Windows worker 的完整闭环，链路包括：
 
 - 简道云后台只读预检。
 - 企微开发者后台只读预检。
+- JDY 推送触发任务，CSM_C360 入库、派发、记录事件。
+- Windows worker 常驻连接并执行真实 handler。
 - 简道云安装/写入 `token`、`encoding_aes_key`。
 - 企微保存开发配置、权限、试用规则、授权域名。
 - 创建企微上线单并提交。
-- 敏感字段脱敏输出。
+- worker 回传结果，CSM_C360 回写 JDY 并推进流程。
+- 敏感字段脱敏输出；真实 Cookie、token、webhook、QR 图片和上下文 JSON 保持在 Windows 本机。
 
 已验证示例：
 
@@ -1169,24 +1172,21 @@ draft -> validated -> active -> archived
 
 ### 阶段 3：jdycsm WebSocket 调度
 
-- 接入 WebSocket 下发 Windows Worker。
-- 按 `required_capability` 和 `required_health_checks` 调度 worker。
-- worker heartbeat 上报 runtime health 摘要。
-- 暂时只做回写，不自动提交/回退。
+- 已完成第一版：`/v1/rpa/workers/ws` 下发任务，Windows worker 主动反连。
+- 已完成 `task.dispatch`、`task.accepted`、`task.progress`、`task.completed` 事件持久化。
+- 已补充 HTTP `/v1/rpa/workers/messages` 作为长任务 WebSocket 关闭时的兜底回传通道。
+- 第一版仍按单 worker 单并发执行 `wecom_bind_service`，不做多 worker 抢占。
 
 ### 阶段 4：简道云回写模块
 
-- 实现 `JdyBindStatusWriter`。
-- 字段映射配置化。
-- 增加回写补偿和重试。
+- 已完成第一版：成功结果回写 `is_bind`、`secret_corp_id`、`home_url`、`webhook_url`，私有表单同时回写 `wx_token`、`wx_key`。
+- 已处理任务摘要脱敏后从原始 completed 事件恢复回写字段。
+- 已接入 JDY API 重试。
 
 ### 阶段 5：流程待办模块
 
-- 实现 `JdyWorkflowTodoService`。
-- 用 `instance_id=data_id` 查询流程实例。
-- 按固定账号筛选当前待办。
-- 支持队内表 `approve`。
-- 再谨慎开放 `rollback`。
+- 已完成第一版成功路径：回写成功后查询待办并 approve，事件记录 `jdy.flow_task.submit.*`。
+- 失败/业务不可执行路径支持按表单配置 rollback；真实回退仍需按业务策略谨慎使用。
 
 ### 阶段 6：通知模块
 
