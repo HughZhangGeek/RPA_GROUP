@@ -94,6 +94,35 @@ class DingtalkGroupHandoffSmokeTest(unittest.TestCase):
 
             self.assertEqual(calls[0], ("position_click", 650, 20))
 
+    def test_can_open_search_with_dingtalk_keyboard_shortcut(self):
+        with TemporaryDirectory() as tmpdir:
+            paths = _write_handoff_files(Path(tmpdir))
+            calls = []
+            runner = DingtalkGroupHandoffSmokeRunner(
+                uia_driver=_FakeDriver(calls),
+                gui_backend=_FakeGui(calls),
+                clipboard_backend=_FakeClipboard(calls),
+                sleep=lambda _seconds: None,
+            )
+
+            runner.run(
+                group_name="帆软测试&简道云沟通群",
+                paths=paths,
+                search_open_mode="shortcut",
+                step_delay_seconds=0,
+                stop_before_add_member=True,
+            )
+
+            self.assertEqual(
+                calls[:4],
+                [
+                    ("hotkey", ("ctrl", "shift", "f")),
+                    ("clipboard_copy", "帆软测试&简道云沟通群"),
+                    ("hotkey", ("ctrl", "a")),
+                    ("hotkey", ("ctrl", "v")),
+                ],
+            )
+
 
 class _FakeDriver:
     def __init__(self, calls):

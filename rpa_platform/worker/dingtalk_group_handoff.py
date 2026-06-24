@@ -52,6 +52,7 @@ class DingtalkGroupHandoffSmokeRunner:
         paths: HandoffElementPaths,
         search_region: Tuple[int, int, int, int] = DEFAULT_SEARCH_REGION,
         normal_group_confidence: float = DEFAULT_NORMAL_GROUP_CONFIDENCE,
+        search_open_mode: str = "click",
         search_click_mode: str = "auto",
         settings_click_mode: str = "auto",
         add_member_click_mode: str = "auto",
@@ -60,7 +61,7 @@ class DingtalkGroupHandoffSmokeRunner:
         step_delay_seconds: float = 0.8,
         stop_before_add_member: bool = False,
     ) -> None:
-        self.click_collected_path(paths.group_search_input, click_mode=search_click_mode)
+        self.open_search(paths.group_search_input, search_open_mode, search_click_mode)
         self.paste_search_text(group_name)
         self._sleep(step_delay_seconds)
 
@@ -88,6 +89,20 @@ class DingtalkGroupHandoffSmokeRunner:
             click_mode=add_member_click_mode,
             override_position=add_member_position,
         )
+
+    def open_search(
+        self,
+        search_input_path: Path,
+        search_open_mode: str = "click",
+        click_mode: str = "auto",
+    ) -> None:
+        if search_open_mode == "shortcut":
+            self._gui.hotkey("ctrl", "shift", "f")
+            return
+        if search_open_mode == "click":
+            self.click_collected_path(search_input_path, click_mode=click_mode)
+            return
+        raise ValueError("Unsupported search_open_mode: %s" % search_open_mode)
 
     def paste_search_text(self, group_name: str) -> None:
         self._clipboard.copy(group_name)
@@ -161,6 +176,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--group-name", default=DEFAULT_GROUP_NAME)
     parser.add_argument("--search-region", default=_format_region(DEFAULT_SEARCH_REGION))
     parser.add_argument("--normal-group-confidence", type=float, default=DEFAULT_NORMAL_GROUP_CONFIDENCE)
+    parser.add_argument("--search-open-mode", choices=("shortcut", "click"), default="shortcut")
     parser.add_argument("--search-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--settings-click-mode", choices=("auto", "uia", "position"), default="auto")
     parser.add_argument("--add-member-click-mode", choices=("auto", "uia", "position"), default="auto")
@@ -192,6 +208,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         paths=paths,
         search_region=_parse_region(args.search_region),
         normal_group_confidence=args.normal_group_confidence,
+        search_open_mode=args.search_open_mode,
         search_click_mode=args.search_click_mode,
         settings_click_mode=args.settings_click_mode,
         add_member_click_mode=args.add_member_click_mode,
