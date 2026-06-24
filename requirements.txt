@@ -9,3 +9,4 @@ Requests==2.32.3
 keyboard==0.13.5
 pillow==10.4.0
 python-dotenv==1.0.0
+uiautomation==2.0.29; platform_system == "Windows"

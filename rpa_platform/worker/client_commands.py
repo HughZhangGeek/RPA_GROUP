@@ -5,15 +5,30 @@ from typing import Any, Dict
 SUPPORTED_ACTIONS = {
     "activate_app",
     "find_element",
+    "wait_element",
     "click_element",
     "set_text",
+    "input_text",
     "clipboard_paste",
     "send_hotkey",
     "wait_until",
     "assert_element",
+    "assert_checked",
+    "scroll_to_element",
     "capture_artifact",
     "fallback_image_click",
     "fallback_position_click",
+}
+
+UIA_TARGET_ACTIONS = {
+    "click_element",
+    "find_element",
+    "set_text",
+    "input_text",
+    "assert_element",
+    "assert_checked",
+    "wait_element",
+    "scroll_to_element",
 }
 
 
@@ -28,7 +43,7 @@ def normalize_client_command(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Client command step_key is required")
     if not command.get("step_name"):
         raise ValueError("Client command step_name is required")
-    if action in ("click_element", "find_element", "set_text", "assert_element"):
+    if action in UIA_TARGET_ACTIONS:
         target = command.get("target") or {}
         if not isinstance(target, dict) or target.get("type") != "uia":
             raise ValueError("%s requires a UIA target" % action)

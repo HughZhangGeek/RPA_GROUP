@@ -17,6 +17,19 @@ class FakeUiaDriver:
     def set_text(self, selector, value):
         self.calls.append(("set_text", selector, value))
 
+    def wait_element(self, selector, timeout_seconds=10.0):
+        self.calls.append(("wait", selector, timeout_seconds))
+        return {"name": selector.get("name", ""), "control_type": selector.get("control_type", "")}
+
+    def input_text(self, selector, value):
+        self.calls.append(("input_text", selector, value))
+
+    def assert_checked(self, selector, expected=True):
+        self.calls.append(("assert_checked", selector, expected))
+
+    def scroll_to_element(self, selector):
+        self.calls.append(("scroll_to", selector))
+
 
 class WecomCreateGroupRunnerTest(unittest.TestCase):
     def test_requires_test_mode_or_confirm_write_before_driver_calls(self):
@@ -128,3 +141,69 @@ class WecomCreateGroupRunnerTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(driver.calls, [("click", open_target)])
+
+    def test_executes_element_driven_permission_commands(self):
+        driver = FakeUiaDriver()
+        runner = WecomCreateGroupRunner(uia_driver=driver)
+        name_checkbox = {
+            "type": "uia",
+            "window_title": "企业微信",
+            "control_type": "CheckBox",
+            "name": "姓名",
+        }
+        dept_checkbox = {
+            "type": "uia",
+            "window_title": "企业微信",
+            "control_type": "CheckBox",
+            "name": "部门名",
+        }
+        save_button = {
+            "type": "uia",
+            "window_title": "企业微信",
+            "control_type": "Button",
+            "name": "保存",
+        }
+
+        result = runner.run_template(
+            task_id="task-001",
+            payload={"test_mode": True, "group_name": "zh_test_服务群"},
+            commands=[
+                {
+                    "step_key": "wait_org_info",
+                    "step_name": "等待组织架构信息",
+                    "action": "wait_element",
+                    "target": name_checkbox,
+                    "timeout_seconds": 3,
+                },
+                {
+                    "step_key": "scroll_dept",
+                    "step_name": "滚动到部门名",
+                    "action": "scroll_to_element",
+                    "target": dept_checkbox,
+                },
+                {
+                    "step_key": "assert_name",
+                    "step_name": "确认姓名已勾选",
+                    "action": "assert_checked",
+                    "target": name_checkbox,
+                    "expected": True,
+                },
+                {
+                    "step_key": "save_permission",
+                    "step_name": "保存权限",
+                    "action": "click_element",
+                    "target": save_button,
+                },
+            ],
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(
+            driver.calls,
+            [
+                ("wait", name_checkbox, 3),
+                ("scroll_to", dept_checkbox),
+                ("assert_checked", name_checkbox, True),
+                ("click", save_button),
+            ],
+        )

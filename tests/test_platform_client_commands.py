@@ -66,3 +66,27 @@ class ClientCommandTest(unittest.TestCase):
         command["target"]["name"] = "被 runner 修改"
 
         self.assertEqual(raw["target"]["name"], "发起群聊")
+
+    def test_accepts_element_driven_actions_for_wecom_permission_page(self):
+        for action in (
+            "wait_element",
+            "input_text",
+            "assert_checked",
+            "scroll_to_element",
+        ):
+            command = normalize_client_command(
+                {
+                    "step_key": action,
+                    "step_name": "企微权限页元素动作",
+                    "action": action,
+                    "target": {
+                        "type": "uia",
+                        "window_title": "企业微信",
+                        "control_type": "CheckBox",
+                        "name": "姓名",
+                    },
+                }
+            )
+
+            self.assertEqual(command["action"], action)
+            self.assertEqual(command["target"]["name"], "姓名")
