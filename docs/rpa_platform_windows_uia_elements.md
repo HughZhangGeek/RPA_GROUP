@@ -252,3 +252,69 @@ python -m rpa_platform.worker.dingtalk_group_handoff --pause-before-start 3 --st
 4. 用 `UiaAutomationDriver` 在 test mode 下执行 `wait/assert/scroll`，先不点击保存。
 5. 确认只读动作稳定后，再把保存按钮点击纳入双门禁写入流程。
 6. 钉钉交接群继续采集 `group_settings_button.json`；如果 UIA 只拿到大面板，改用高风险坐标兜底命令打开设置页，再采集设置页内后续元素。
+
+## 8. 钉钉交接群批量执行
+
+状态：2026-06-24 可本地小批量试跑
+
+批量脚本入口：
+
+- `rpa_platform/worker/dingtalk_group_handoff_batch.py`
+- `scripts/dev/run_dingtalk_group_handoff_batch.py`
+
+脚本读取 Excel 的 A 列群名称，并把每行结果写回 B 列。即使 Excel 因格式残留导致 `max_row` 很大，脚本也只处理 A 列非空的行。每处理一行默认立即保存一次 workbook，避免中断后丢进度。
+
+Windows 侧更新代码：
+
+```powershell
+conda activate RPA_GROUP
+cd C:\rpa_work\RPA_GROUP
+. C:\rpa_work\RPA_GROUP\.local\rpa-worker-env.ps1
+git pull origin feat/windows-uia-elements
+```
+
+先做只读预览：
+
+```powershell
+python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --dry-run --limit 3
+```
+
+小批量真实执行 3 行：
+
+```powershell
+python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --limit 3 --skip-completed
+```
+
+确认稳定后正式运行：
+
+```powershell
+python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RPA_GROUP\.local\elements\dingtalk_group_handoff\需要转交的群.xlsx --skip-completed
+```
+
+可用参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--workbook` | `.local\elements\dingtalk_group_handoff\需要转交的群.xlsx` | Excel 路径，可传用户放置的任意同结构文件。 |
+| `--sheet` | `Sheet1` | 工作表名。 |
+| `--member-name` | `季钰杰` | 要添加的成员名。 |
+| `--start-row` | `2` | 从第几行开始处理。 |
+| `--limit` | 空 | 限制本次处理的非空群名数量，适合先小批量测试。 |
+| `--dry-run` | 关闭 | 只打印将处理的群，不点击、不写 B 列。 |
+| `--skip-completed` | 关闭 | B 列已有状态时跳过。 |
+| `--save-every` | `1` | 每处理多少行保存一次，默认每行保存。 |
+
+当前写回状态：
+
+- `添加成功`
+- `成员已在群内`
+- `群不存在`
+- `添加成员入口失败`
+- `确认按钮未点击`
+- `异常：<简短原因>`
+
+注意：
+
+- 执行前保持钉钉窗口可见，并把 Mac 本机鼠标移出 RDP 窗口，避免干扰 RDP 内坐标点击。
+- 搜索群名和成员名使用剪贴板粘贴；PowerShell 中文参数不稳定时，优先使用默认 `--member-name`。
+- 本地资产仍放在 `.local\elements\dingtalk_group_handoff\`，包括 Excel、元素 JSON 和截图模板，不提交仓库。
