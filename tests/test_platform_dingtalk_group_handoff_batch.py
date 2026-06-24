@@ -215,18 +215,54 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
     def test_window_guard_restores_and_activates_matching_dingtalk_window(self):
         calls = []
         window = _FakeWindow("钉钉", calls, minimized=True)
-        guard = DingtalkWindowGuard(window_backend=_FakeWindowBackend([window]))
+        guard = DingtalkWindowGuard(
+            window_backend=_FakeWindowBackend([window]),
+            activation_backend=_FakeActivationBackend(calls),
+            sleep=lambda _seconds: None,
+        )
 
         title = guard.capture()
 
         self.assertEqual(title, "钉钉")
         self.assertEqual(calls, [("restore", "钉钉"), ("activate", "钉钉")])
 
+    def test_window_guard_uses_shift_q_then_retries_when_window_is_missing(self):
+        calls = []
+        windows = []
+        activation_backend = _FakeActivationBackend(
+            calls,
+            on_hotkey=lambda: windows.append(_FakeWindow("钉钉", calls)),
+        )
+        guard = DingtalkWindowGuard(
+            window_backend=_FakeWindowBackend(windows),
+            activation_backend=activation_backend,
+            sleep=lambda seconds: calls.append(("sleep", seconds)),
+            activation_delay_seconds=0.1,
+        )
+
+        title = guard.capture()
+
+        self.assertEqual(title, "钉钉")
+        self.assertEqual(
+            calls,
+            [
+                ("hotkey", ("shift", "q")),
+                ("sleep", 0.1),
+                ("activate", "钉钉"),
+            ],
+        )
+
     def test_window_guard_raises_when_dingtalk_window_is_missing(self):
-        guard = DingtalkWindowGuard(window_backend=_FakeWindowBackend([]))
+        calls = []
+        guard = DingtalkWindowGuard(
+            window_backend=_FakeWindowBackend([]),
+            activation_backend=_FakeActivationBackend(calls),
+            sleep=lambda _seconds: None,
+        )
 
         with self.assertRaises(DingtalkWindowNotCaptured):
             guard.capture()
+        self.assertEqual(calls, [("hotkey", ("shift", "q"))])
 
 
 class _FakeHandoffBackend:
@@ -294,6 +330,17 @@ class _FakeWindowBackend:
     def getWindowsWithTitle(self, title):
         title_lower = title.lower()
         return [window for window in self.windows if title_lower in window.title.lower()]
+
+
+class _FakeActivationBackend:
+    def __init__(self, calls, on_hotkey=None):
+        self.calls = calls
+        self.on_hotkey = on_hotkey
+
+    def hotkey(self, *keys):
+        self.calls.append(("hotkey", tuple(keys)))
+        if self.on_hotkey is not None:
+            self.on_hotkey()
 
 
 class _FakeWindow:

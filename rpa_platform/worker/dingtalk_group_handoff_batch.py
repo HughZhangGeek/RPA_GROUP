@@ -47,6 +47,9 @@ class DingtalkWindowGuard:
     def __init__(
         self,
         window_backend: Any = None,
+        activation_backend: Any = None,
+        sleep: Any = time.sleep,
+        activation_delay_seconds: float = 0.5,
         title_keywords: Tuple[str, ...] = ("钉钉", "DingTalk"),
     ) -> None:
         if window_backend is None:
@@ -54,22 +57,16 @@ class DingtalkWindowGuard:
 
             window_backend = pygetwindow
         self._window_backend = window_backend
+        self._activation_backend = activation_backend
+        self._sleep = sleep
+        self._activation_delay_seconds = activation_delay_seconds
         self._title_keywords = title_keywords
 
     def capture(self) -> str:
-        windows = []
-        seen = set()
-        for keyword in self._title_keywords:
-            try:
-                found_windows = self._window_backend.getWindowsWithTitle(keyword)
-            except Exception as exc:
-                raise DingtalkWindowNotCaptured("查询钉钉窗口失败：%s" % _short_error(exc)) from exc
-            for window in found_windows:
-                marker = id(window)
-                if marker in seen:
-                    continue
-                seen.add(marker)
-                windows.append(window)
+        windows = self._find_windows()
+        if not windows:
+            self._trigger_dingtalk_activation_shortcut()
+            windows = self._find_windows()
 
         for window in windows:
             title = str(getattr(window, "title", "") or "").strip()
@@ -85,6 +82,34 @@ class DingtalkWindowGuard:
             return title or "钉钉"
 
         raise DingtalkWindowNotCaptured("未找到标题包含 钉钉/DingTalk 的窗口")
+
+    def _find_windows(self) -> List[Any]:
+        windows = []
+        seen = set()
+        for keyword in self._title_keywords:
+            try:
+                found_windows = self._window_backend.getWindowsWithTitle(keyword)
+            except Exception as exc:
+                raise DingtalkWindowNotCaptured("查询钉钉窗口失败：%s" % _short_error(exc)) from exc
+            for window in found_windows:
+                marker = id(window)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                windows.append(window)
+        return windows
+
+    def _trigger_dingtalk_activation_shortcut(self) -> None:
+        activation_backend = self._activation_backend
+        if activation_backend is None:
+            import pyautogui  # type: ignore
+
+            activation_backend = pyautogui
+        try:
+            activation_backend.hotkey("shift", "q")
+            self._sleep(self._activation_delay_seconds)
+        except Exception as exc:
+            raise DingtalkWindowNotCaptured("触发 shift+q 激活钉钉失败：%s" % _short_error(exc)) from exc
 
 
 @dataclass(frozen=True)
