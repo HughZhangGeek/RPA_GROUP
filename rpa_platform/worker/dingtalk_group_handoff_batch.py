@@ -20,6 +20,8 @@ DEFAULT_WORKBOOK = DEFAULT_ELEMENTS_DIR / "需要转交的群.xlsx"
 DEFAULT_MEMBER_NAME = "\u5b63\u94b0\u6770"
 DEFAULT_MEMBER_ALREADY_IN_REGION = (600, 300, 600, 200)
 DEFAULT_MEMBER_ALREADY_IN_CONFIDENCE = 0.70
+DEFAULT_ADD_MEMBER_REGION = (1441, 50, 455, 576)
+DEFAULT_ADD_MEMBER_CONFIDENCE = 0.75
 DEFAULT_SETTINGS_POSITION = (1874, 66)
 DEFAULT_CONFIRM_POSITION = (700, 805)
 DEFAULT_ADD_MEMBER_POSITION = (1613, 243)
@@ -135,6 +137,8 @@ class DingtalkGroupHandoffGuiBackend:
         normal_group_confidence: float = DEFAULT_NORMAL_GROUP_CONFIDENCE,
         member_already_in_region: Tuple[int, int, int, int] = DEFAULT_MEMBER_ALREADY_IN_REGION,
         member_already_in_confidence: float = DEFAULT_MEMBER_ALREADY_IN_CONFIDENCE,
+        add_member_region: Tuple[int, int, int, int] = DEFAULT_ADD_MEMBER_REGION,
+        add_member_confidence: float = DEFAULT_ADD_MEMBER_CONFIDENCE,
         settings_position: Tuple[int, int] = DEFAULT_SETTINGS_POSITION,
         confirm_position: Tuple[int, int] = DEFAULT_CONFIRM_POSITION,
         add_member_position: Tuple[int, int] = DEFAULT_ADD_MEMBER_POSITION,
@@ -150,6 +154,7 @@ class DingtalkGroupHandoffGuiBackend:
             clipboard_backend = pyperclip
 
         self._paths = HandoffElementPaths.from_dir(Path(elements_dir))
+        self._add_member_image = Path(elements_dir) / "add_member.png"
         self._member_already_in_image = Path(elements_dir) / "member_already_in.png"
         self._uia_driver = uia_driver or UiaAutomationDriver()
         self._gui = gui_backend
@@ -159,6 +164,8 @@ class DingtalkGroupHandoffGuiBackend:
         self._normal_group_confidence = normal_group_confidence
         self._member_already_in_region = member_already_in_region
         self._member_already_in_confidence = member_already_in_confidence
+        self._add_member_region = add_member_region
+        self._add_member_confidence = add_member_confidence
         self._settings_position = settings_position
         self._confirm_position = confirm_position
         self._add_member_position = add_member_position
@@ -197,12 +204,14 @@ class DingtalkGroupHandoffGuiBackend:
         self._uia_driver.click_position(*self._settings_position)
         self._sleep(self._step_delay_seconds)
 
-        try:
-            self._smoke_runner.click_collected_path(
-                self._paths.add_member_button,
-                override_position=self._add_member_position,
-            )
-        except Exception:
+        if not self._add_member_image.exists():
+            self.close_active_dialogs()
+            return STATUS_ADD_MEMBER_ENTRY_FAILED
+        if not self._click_image_if_present(
+            self._add_member_image,
+            confidence=self._add_member_confidence,
+            region=self._add_member_region,
+        ):
             self.close_active_dialogs()
             return STATUS_ADD_MEMBER_ENTRY_FAILED
         self._sleep(self._step_delay_seconds)

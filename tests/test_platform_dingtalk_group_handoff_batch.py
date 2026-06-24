@@ -1,14 +1,19 @@
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 from openpyxl import Workbook, load_workbook
 
 from rpa_platform.worker.dingtalk_group_handoff_batch import (
     BatchOptions,
+    DingtalkGroupHandoffGuiBackend,
     DingtalkGroupHandoffBatchRunner,
+    STATUS_ADD_MEMBER_ENTRY_FAILED,
+    STATUS_SUCCESS,
 )
 
 
@@ -107,6 +112,55 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
             self.assertNotIn("群B", output.getvalue())
             self.assertEqual(_column_values(workbook, "B", 2, 3), [None, None])
 
+    def test_gui_backend_returns_add_member_entry_failed_when_add_member_image_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            elements_dir = _write_handoff_files(Path(tmpdir))
+            calls = []
+            backend = DingtalkGroupHandoffGuiBackend(
+                elements_dir=elements_dir,
+                uia_driver=_FakeDriver(calls),
+                gui_backend=_FakeGui(
+                    calls,
+                    image_results={
+                        "normal_group.png": SimpleNamespace(left=617, top=112, width=42, height=24),
+                        "add_member.png": None,
+                    },
+                ),
+                clipboard_backend=_FakeClipboard(calls),
+                sleep=lambda _seconds: None,
+            )
+
+            status = backend.handoff_group("群A", "季钰杰")
+
+            self.assertEqual(status, STATUS_ADD_MEMBER_ENTRY_FAILED)
+            self.assertIn(("locate", "add_member.png", 0.75, (1441, 50, 455, 576)), calls)
+            self.assertNotIn(("position_click", 700, 805), calls)
+
+    def test_gui_backend_clicks_add_member_image_when_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            elements_dir = _write_handoff_files(Path(tmpdir))
+            calls = []
+            backend = DingtalkGroupHandoffGuiBackend(
+                elements_dir=elements_dir,
+                uia_driver=_FakeDriver(calls),
+                gui_backend=_FakeGui(
+                    calls,
+                    image_results={
+                        "normal_group.png": SimpleNamespace(left=617, top=112, width=42, height=24),
+                        "add_member.png": SimpleNamespace(left=1600, top=230, width=34, height=26),
+                        "member_already_in.png": None,
+                    },
+                ),
+                clipboard_backend=_FakeClipboard(calls),
+                sleep=lambda _seconds: None,
+            )
+
+            status = backend.handoff_group("群A", "季钰杰")
+
+            self.assertEqual(status, STATUS_SUCCESS)
+            self.assertIn(("locate", "add_member.png", 0.75, (1441, 50, 455, 576)), calls)
+            self.assertIn(("position_click", 1617, 243), calls)
+
 
 class _FakeHandoffBackend:
     def __init__(self, outcomes):
@@ -121,6 +175,39 @@ class _FakeHandoffBackend:
         return outcome
 
 
+class _FakeDriver:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def click_position(self, x, y):
+        self.calls.append(("position_click", x, y))
+
+
+class _FakeGui:
+    def __init__(self, calls, image_results):
+        self.calls = calls
+        self.image_results = image_results
+
+    def hotkey(self, *keys):
+        self.calls.append(("hotkey", tuple(keys)))
+
+    def press(self, key):
+        self.calls.append(("press", key))
+
+    def locateOnScreen(self, image, confidence, region):
+        image_name = Path(image).name
+        self.calls.append(("locate", image_name, confidence, region))
+        return self.image_results.get(image_name)
+
+
+class _FakeClipboard:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def copy(self, value):
+        self.calls.append(("clipboard_copy", value))
+
+
 def _write_workbook(path: Path, rows) -> Path:
     workbook = Workbook()
     sheet = workbook.active
@@ -129,6 +216,50 @@ def _write_workbook(path: Path, rows) -> Path:
         sheet.append(row)
     workbook.save(path)
     return path
+
+
+def _write_handoff_files(root: Path) -> Path:
+    elements_dir = root / "dingtalk_group_handoff"
+    elements_dir.mkdir()
+    for filename in ("normal_group.png", "add_member.png", "member_already_in.png"):
+        (elements_dir / filename).write_bytes(b"fake-image")
+
+    files = {
+        "group_search_input.json": {
+            "target": _target("search_input", "EditControl"),
+            "fallback_position": {"x": 650, "y": 20},
+        },
+        "select_search_type_group.json": {
+            "target": _target("select_group", "TextControl"),
+            "fallback_position": {"x": 610, "y": 80},
+        },
+        "group_settings_button.json": {
+            "target": _target("settings_button", "ButtonControl"),
+            "fallback_position": {"x": 1874, "y": 66},
+        },
+        "add_member_button.json": {
+            "target": _target("add_member_button", "ButtonControl"),
+            "fallback_position": {"x": 1613, "y": 243},
+        },
+    }
+    for filename, payload in files.items():
+        (elements_dir / filename).write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    return elements_dir
+
+
+def _target(automation_id: str, control_type: str) -> dict:
+    return {
+        "type": "uia",
+        "window_title": "钉钉",
+        "control_type": control_type,
+        "name": automation_id,
+        "automation_id": automation_id,
+        "class_name": "",
+        "bounding_rect_hint": [1, 2, 3, 4],
+    }
 
 
 def _column_values(path: Path, column: str, start: int, end: int):

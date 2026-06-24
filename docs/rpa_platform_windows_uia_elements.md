@@ -116,7 +116,8 @@ Get-Content .local\elements\wecom_bind_permission\name.json -Encoding UTF8
 - 已进入目标群：`帆软测试&简道云沟通群`。
 - 搜索弹层已验证可通过“群组”和“普通群”进入群。
 - 采集第一步目标是群页面右上角或侧边的“设置”按钮。
-- 现场已确认：设置按钮固定坐标为 `(1874,66)`；“添加成员”按钮固定坐标为 `(1613,243)`。当前 smoke 和批量脚本默认使用这两个坐标，避免钉钉元素点击失效。
+- 现场已确认：设置按钮固定坐标为 `(1874,66)`；“添加成员”按钮旧坐标为 `(1613,243)`。当前 smoke 默认仍可用坐标调试，批量脚本已改为优先识别 `add_member.png`。
+- `add_member.png` 识别区域为 `(1441,50),(1896,51),(1441,626),(1896,626)`，代码中换算为 `pyautogui region=(1441,50,455,576)`。
 
 Windows PowerShell 命令：
 
@@ -324,5 +325,6 @@ python scripts\dev\run_dingtalk_group_handoff_batch.py --workbook C:\rpa_work\RP
 
 - 执行前保持钉钉窗口可见，并把 Mac 本机鼠标移出 RDP 窗口，避免干扰 RDP 内坐标点击。
 - 批量脚本默认使用 `ctrl+shift+f` 呼出搜索框，避免钉钉 UIA 点击返回成功但实际没有聚焦。
+- 批量脚本进入设置页后用 `.local\elements\dingtalk_group_handoff\add_member.png` 在 `region=(1441,50,455,576)` 内识别“添加成员”入口；识别失败会写 `添加成员入口失败`，保存当前行，然后继续下一行。
 - 搜索群名和成员名使用剪贴板粘贴；PowerShell 中文参数不稳定时，优先使用默认 `--member-name`。
 - 本地资产仍放在 `.local\elements\dingtalk_group_handoff\`，包括 Excel、元素 JSON 和截图模板，不提交仓库。
