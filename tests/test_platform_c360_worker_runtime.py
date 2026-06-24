@@ -35,6 +35,17 @@ class FailingCompletedTransport(FakeTransport):
         await super().send_json(payload)
 
 
+class FailingProgressTransport(FakeTransport):
+    def __init__(self, incoming, failed_status):
+        super().__init__(incoming)
+        self.failed_status = failed_status
+
+    async def send_json(self, payload):
+        if payload.get("type") == "task.progress" and payload.get("status") == self.failed_status:
+            raise RuntimeError("Cannot write to closing transport")
+        await super().send_json(payload)
+
+
 class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
     def _config(self, simulate=True):
         return load_c360_worker_config_from_env(
@@ -261,14 +272,59 @@ class C360WorkerRuntimeTest(unittest.IsolatedAsyncioTestCase):
             message_reporter=reporter,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "websocket closed"):
-            await runtime.run_until_idle()
+        await runtime.run_until_idle()
 
         completed = [item for item in reported if item.get("type") == "task.completed"]
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["task_id"], "task-side-channel")
         self.assertEqual(completed[0]["status"], "succeeded")
         self.assertEqual(completed[0]["result"]["status"], "success")
+
+    async def test_worker_continues_after_progress_websocket_send_fails_when_side_channel_succeeds(self):
+        class SuccessfulHandlers:
+            async def handle(self, dispatch):
+                return WorkerTaskResult(
+                    status="success",
+                    result={"status": "success"},
+                    progress=[
+                        {"status": "readonly_preflight_started"},
+                        {"status": "readonly_preflight_completed"},
+                        {"status": "real_write_completed"},
+                    ],
+                )
+
+        reported = []
+
+        async def reporter(payload):
+            reported.append(dict(payload))
+
+        transport = FailingProgressTransport(
+            [
+                {"type": "worker.accepted", "worker_id": "win-server-001"},
+                {
+                    "type": "task.dispatch",
+                    "task_id": "task-progress-side-channel",
+                    "task_type": "wecom_bind_service",
+                    "route_key": "wecom_bind_service",
+                    "simulate": False,
+                    "payload": {"task_type": "wecom_bind_service"},
+                },
+            ],
+            failed_status="readonly_preflight_completed",
+        )
+        runtime = C360WorkerRuntime(
+            config=self._config(simulate=False),
+            transport=transport,
+            handlers=SuccessfulHandlers(),
+            message_reporter=reporter,
+        )
+
+        await runtime.run_until_idle()
+
+        reported_statuses = [item.get("status") for item in reported if item.get("type") in {"task.progress", "task.completed"}]
+        self.assertIn("readonly_preflight_completed", reported_statuses)
+        self.assertIn("real_write_completed", reported_statuses)
+        self.assertIn("succeeded", reported_statuses)
 
     async def test_worker_task_result_blocked_is_reported_as_failed_with_domain_status_in_result(self):
         class BlockedHandlers:

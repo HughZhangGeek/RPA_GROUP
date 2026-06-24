@@ -125,6 +125,7 @@ class C360WorkerRuntime:
 
     async def _send_worker_message(self, payload: Dict[str, Any]) -> None:
         send_error = None
+        reported = False
         try:
             await self.transport.send_json(payload)
         except Exception as exc:
@@ -134,9 +135,10 @@ class C360WorkerRuntime:
                 reported = self.message_reporter(dict(payload))
                 if inspect.isawaitable(reported):
                     await reported
+                reported = True
             except Exception as exc:
                 self._log("worker message reporter failed: %s" % _safe_text(exc))
-        if send_error is not None:
+        if send_error is not None and not reported:
             raise send_error
 
     def _log(self, message: str) -> None:
