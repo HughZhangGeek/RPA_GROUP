@@ -26,6 +26,7 @@ DEFAULT_SETTINGS_POSITION = (1874, 66)
 DEFAULT_CONFIRM_POSITION = (700, 805)
 DEFAULT_ADD_MEMBER_POSITION = (1613, 243)
 DEFAULT_MEMBER_INPUT_POSITION = (678, 366)
+DEFAULT_SEARCH_READY_POSITION = (793, 963)
 
 STATUS_SUCCESS = "添加成功"
 STATUS_MEMBER_ALREADY_IN = "成员已在群内"
@@ -218,6 +219,7 @@ class DingtalkGroupHandoffGuiBackend:
         confirm_position: Tuple[int, int] = DEFAULT_CONFIRM_POSITION,
         add_member_position: Tuple[int, int] = DEFAULT_ADD_MEMBER_POSITION,
         member_input_position: Tuple[int, int] = DEFAULT_MEMBER_INPUT_POSITION,
+        search_ready_position: Tuple[int, int] = DEFAULT_SEARCH_READY_POSITION,
         step_delay_seconds: float = 1.0,
         window_guard: Any = None,
     ) -> None:
@@ -247,6 +249,7 @@ class DingtalkGroupHandoffGuiBackend:
         self._confirm_position = confirm_position
         self._add_member_position = add_member_position
         self._member_input_position = member_input_position
+        self._search_ready_position = search_ready_position
         self._step_delay_seconds = step_delay_seconds
         self._window_guard = window_guard or DingtalkWindowGuard()
         self._smoke_runner = DingtalkGroupHandoffSmokeRunner(
@@ -267,6 +270,8 @@ class DingtalkGroupHandoffGuiBackend:
         )
         self._delay_step()
 
+        self._uia_driver.click_position(*self._search_ready_position)
+        self._delay_step()
         self._clipboard.copy(group_name)
         self._delay_step()
         self._gui.hotkey("ctrl", "a")

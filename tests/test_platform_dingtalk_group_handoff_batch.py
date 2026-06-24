@@ -191,6 +191,16 @@ class DingtalkGroupHandoffBatchTest(unittest.TestCase):
 
             self.assertEqual(status, STATUS_SUCCESS)
             self.assertEqual(calls[0], ("capture_window",))
+            self.assertIn(
+                [
+                    ("hotkey", ("ctrl", "shift", "f")),
+                    ("sleep", 1.0),
+                    ("position_click", 793, 963),
+                    ("sleep", 1.0),
+                    ("clipboard_copy", "群A"),
+                ],
+                _windows(calls, 5),
+            )
             self.assertIn(("locate", "add_member.png", 0.75, (1441, 50, 455, 576)), calls)
             self.assertIn(("position_click", 1617, 243), calls)
             self.assertIn(
