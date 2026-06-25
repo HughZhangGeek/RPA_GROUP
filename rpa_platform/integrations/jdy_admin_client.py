@@ -23,6 +23,9 @@ class OwnerCannotBindError(JdyAdminError):
     """Raised when get_owner says the User_ID cannot bind corp secret."""
 
 
+MISSING_CORP_ID_DEPLOY_MESSAGE = "根据当前 CorpID 暂无匹配企业，请检查 CorpID 输入无误，并确认对应企业已完成扫码授权。"
+
+
 @dataclass(frozen=True)
 class JdyCorpDeploy:
     deploy_id: str
@@ -95,7 +98,7 @@ class JdyAdminClient:
                 return result.rows[0]
             if len(result.rows) > 1:
                 raise AmbiguousCorpDeployError("根据 CorpID 检索到多家企业，请联系管理员处理企业数据")
-            raise MissingCorpDeployError("根据 CorpID 未检索到企业，请检查 CorpID 是否填写正确")
+            raise MissingCorpDeployError(MISSING_CORP_ID_DEPLOY_MESSAGE)
 
         if not name:
             raise MissingCorpDeployError("请填写 CorpID 或企业名称后重试")

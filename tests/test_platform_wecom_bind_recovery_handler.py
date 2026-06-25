@@ -358,6 +358,7 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
                 "mode": "unattended_write",
                 "status": "business_unexecutable",
                 "reason": "jdy_corp_not_unique_or_missing",
+                "error_msg": "根据当前 CorpID 暂无匹配企业，请检查 CorpID 输入无误，并确认对应企业已完成扫码授权。",
             }
         )
         handler = WecomBindRecoveryTaskHandler(recovery)
@@ -380,6 +381,10 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.result["status"], "business_unexecutable")
         self.assertEqual(result.result["reason"], "jdy_corp_not_unique_or_missing")
+        self.assertEqual(
+            result.result["error_msg"],
+            "根据当前 CorpID 暂无匹配企业，请检查 CorpID 输入无误，并确认对应企业已完成扫码授权。",
+        )
         self.assertNotIn("real_write_started", str(result.progress))
         self.assertNotIn("real_write_failed", str(result.progress))
 

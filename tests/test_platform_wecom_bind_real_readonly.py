@@ -276,7 +276,10 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason"], "jdy_corp_not_unique_or_missing")
-        self.assertEqual(result["error_msg"], "根据 CorpID 未检索到企业，请检查 CorpID 是否填写正确")
+        self.assertEqual(
+            result["error_msg"],
+            "根据当前 CorpID 暂无匹配企业，请检查 CorpID 输入无误，并确认对应企业已完成扫码授权。",
+        )
 
     def test_readonly_preflight_reports_explainable_already_bound_owner_state(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
