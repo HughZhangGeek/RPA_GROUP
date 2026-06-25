@@ -61,6 +61,8 @@ modalVisible = true
 
 因此没有独立的“获取绑定弹窗详情接口”。接口化实现中，弹窗详情应直接来自搜索接口返回的目标行。
 
+当表单 payload 未填写 User_ID 时，默认 User_ID 取目标行的 `tenant_id`，不是部署记录 `_id`。
+
 弹窗字段：
 
 - `corp_id`：企业 ID，disabled，必填

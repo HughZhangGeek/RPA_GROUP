@@ -33,7 +33,7 @@ class JdyAdminClientTest(unittest.TestCase):
                             "_id": "row-1",
                             "corp_id": "corp-secret",
                             "name": "安徽云速付",
-                            "tenant_id": "",
+                            "tenant_id": "tenant-user-1",
                             "suite_name": "简道云",
                             "integrate_suite_name": "简道云",
                             "suite_id": 1,
@@ -49,7 +49,8 @@ class JdyAdminClientTest(unittest.TestCase):
 
         self.assertFalse(result.has_more)
         self.assertEqual(result.rows[0].deploy_id, "row-1")
-        self.assertEqual(result.rows[0].default_userid, "row-1")
+        self.assertEqual(result.rows[0].default_userid, "tenant-user-1")
+        self.assertEqual(result.rows[0].tenant_id, "tenant-user-1")
         self.assertEqual(result.rows[0].corp_id, "corp-secret")
         self.assertEqual(result.rows[0].suite_id, 1)
         self.assertEqual(transport.calls[0]["path"], "/api/fx_sa/wxwork/get_corp_deploy_list")
