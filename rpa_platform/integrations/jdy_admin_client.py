@@ -25,6 +25,8 @@ class OwnerCannotBindError(JdyAdminError):
 
 @dataclass(frozen=True)
 class JdyCorpDeploy:
+    deploy_id: str
+    default_userid: str
     corp_id: str
     name: str
     tenant_id: str
@@ -148,10 +150,14 @@ class JdyAdminClient:
 
     @staticmethod
     def _parse_corp_row(row: Dict[str, Any]) -> JdyCorpDeploy:
+        deploy_id = str(row.get("_id", ""))
+        tenant_id = str(row.get("tenant_id", ""))
         return JdyCorpDeploy(
+            deploy_id=deploy_id,
+            default_userid=tenant_id,
             corp_id=str(row.get("corp_id", "")),
             name=str(row.get("name", "")),
-            tenant_id=str(row.get("tenant_id", "")),
+            tenant_id=tenant_id,
             suite_name=str(row.get("suite_name", "")),
             integrate_suite_name=str(row.get("integrate_suite_name", "")),
             suite_id=int(row.get("suite_id") or 0),

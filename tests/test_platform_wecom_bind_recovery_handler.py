@@ -15,7 +15,7 @@ class FakeRecovery:
 
 
 class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
-    def test_real_recovery_marks_default_userid_source_without_filling_userid(self):
+    def test_real_recovery_uses_default_userid_from_downstream_resolution(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery
 
         class RecordingRecovery:
@@ -24,7 +24,16 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
 
             def run(self, task_id, context):
                 self.calls.append({"task_id": task_id, "context": dict(context)})
-                return {"status": "ready_for_real_bind", "reason": "ready_for_confirm_write"}
+                context["requested_user_id"] = "deploy-default-userid"
+                context["userid"] = "deploy-default-userid"
+                return {
+                    "status": "ready_for_real_bind",
+                    "reason": "ready_for_confirm_write",
+                    "jdy": {
+                        "requested_user_id": "deploy-default-userid",
+                        "bound_user_id": "deploy-default-userid",
+                    },
+                }
 
         recovery = RecordingRecovery()
         real_recovery = RealWecomBindRecovery(orchestrator_factory=lambda context: recovery)
@@ -40,9 +49,9 @@ class WecomBindRecoveryTaskHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "ready_for_real_bind")
         self.assertEqual(result["userid_source"], "default")
-        self.assertEqual(recovery.calls[0]["context"].get("requested_user_id", ""), "")
-        self.assertEqual(recovery.calls[0]["context"].get("userid", ""), "")
         self.assertEqual(recovery.calls[0]["context"]["userid_source"], "default")
+        self.assertEqual(result["jdy"]["requested_user_id"], "deploy-default-userid")
+        self.assertEqual(result["jdy"]["bound_user_id"], "deploy-default-userid")
 
     def test_real_recovery_allows_missing_userid_to_continue_to_jdy_default(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery

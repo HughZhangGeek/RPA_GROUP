@@ -22,9 +22,10 @@ class RecordingJdyTransport(JdyAdminTransport):
                 "has_more": False,
                 "corp_deploy_list": [
                     {
+                        "_id": "deploy-default-userid",
                         "corp_id": "corp-secret-123456",
                         "name": "上海测试客户",
-                        "tenant_id": "old-user",
+                        "tenant_id": "tenant-default-userid",
                         "suite_name": "简道云",
                         "integrate_suite_name": "简道云集成",
                         "suite_id": 1,
@@ -110,7 +111,7 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["reason"], "ready_for_confirm_write")
         self.assertEqual(result["enterprise_name"], "上海测试客户")
-        self.assertEqual(result["jdy"]["original_tenant_id"], "old-user")
+        self.assertEqual(result["jdy"]["original_tenant_id"], "tenant-default-userid")
         self.assertEqual(result["jdy"]["requested_user_id"], "user-1")
         self.assertEqual(result["wecom"]["app_id"], "app-123456789")
         self.assertNotIn("ww-plain-secret", serialized)
@@ -130,6 +131,33 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
             [call["path"] for call in wecom_transport.calls],
             ["/wwopen/developer/customApp/tpl/app/list"],
         )
+
+    def test_readonly_preflight_uses_unique_corp_tenant_id_when_payload_userid_is_missing(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        jdy_transport = RecordingJdyTransport()
+        wecom_transport = RecordingWecomTransport()
+        request = JdyWecomBindInput(
+            enterprise_name="上海测试客户",
+            plain_corp_id="ww-plain-secret",
+            requested_user_id="",
+            suite_id=1,
+            suite_scenario="main",
+            wecom_suiteid=1009479,
+            suite_name="简道云",
+        )
+
+        result = run_readonly_preflight(
+            request,
+            jdy_client=JdyAdminClient(jdy_transport),
+            wecom_client=WecomAdminClient(wecom_transport),
+        )
+
+        owner_calls = [call for call in jdy_transport.calls if call["path"] == "/api/fx_sa/wxwork/get_owner"]
+        self.assertEqual(owner_calls[0]["payload"]["user_id"], "tenant-default-userid")
+        self.assertEqual(result["jdy"]["requested_user_id"], "tenant-default-userid")
+        self.assertEqual(result["jdy"]["bound_user_id"], "tenant-default-userid")
+        self.assertEqual(result["userid_source"], "default")
 
     def test_readonly_preflight_accepts_jdy_full_name_and_short_name_pair(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight

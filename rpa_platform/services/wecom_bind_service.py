@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import secrets
 import string
@@ -74,6 +74,7 @@ class JdyWecomBindService:
             request.plain_corp_id,
             request.enterprise_short_name or request.enterprise_name,
         )
+        request = _with_corp_default_userid(request, corp)
         wecom_authcorp_name = request.enterprise_short_name or corp.name or request.enterprise_name
         app = self.wecom_client.resolve_unique_custom_app(
             suiteid=request.wecom_suiteid,
@@ -173,3 +174,12 @@ class JdyWecomBindService:
             status="success",
             context={"wecom": {"auditorder_status": order.status}},
         )
+
+
+def _with_corp_default_userid(request: JdyWecomBindInput, corp: Any) -> JdyWecomBindInput:
+    if request.requested_user_id.strip():
+        return request
+    default_userid = str(getattr(corp, "default_userid", "") or "").strip()
+    if not default_userid:
+        return request
+    return replace(request, requested_user_id=default_userid)
