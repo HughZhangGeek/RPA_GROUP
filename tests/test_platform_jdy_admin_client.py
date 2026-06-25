@@ -48,6 +48,8 @@ class JdyAdminClientTest(unittest.TestCase):
         result = client.search_corp_deploy_list("安徽云速付")
 
         self.assertFalse(result.has_more)
+        self.assertEqual(result.rows[0].deploy_id, "row-1")
+        self.assertEqual(result.rows[0].default_userid, "row-1")
         self.assertEqual(result.rows[0].corp_id, "corp-secret")
         self.assertEqual(result.rows[0].suite_id, 1)
         self.assertEqual(transport.calls[0]["path"], "/api/fx_sa/wxwork/get_corp_deploy_list")

@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import parse, request
@@ -107,7 +108,9 @@ def run_readonly_preflight(
     owner = None
     try:
         corp = jdy_client.resolve_unique_corp(bind_input.plain_corp_id, jdy_lookup_name)
+        bind_input, userid_source = _with_corp_default_userid(bind_input, corp)
     except (JdyAdminError, JsonHttpError) as exc:
+        userid_source = "payload" if bind_input.requested_user_id.strip() else "default"
         if _is_jdy_session_expired_error(exc):
             return _failure_summary(bind_input, "jdy_session_expired", exc)
         try:
@@ -147,6 +150,7 @@ def run_readonly_preflight(
             status="blocked",
             reason="owner_cannot_bind_or_update_corp_secret",
             owner_state=owner_state,
+            userid_source=userid_source,
         )
 
     try:
@@ -195,6 +199,7 @@ def run_readonly_preflight(
         status=status,
         reason=reason,
         owner_state=owner_state,
+        userid_source=userid_source,
     )
 
 
@@ -349,6 +354,8 @@ def _recover_corp_from_owner(bind_input: JdyWecomBindInput, owner: Any) -> Optio
     if corp_name not in _acceptable_enterprise_names(bind_input):
         return None
     return JdyCorpDeploy(
+        deploy_id=bind_input.requested_user_id,
+        default_userid=bind_input.requested_user_id,
         corp_id=owner.owner_corp_id,
         name=corp_name,
         tenant_id=bind_input.requested_user_id,
@@ -366,10 +373,12 @@ def _summary(
     status: str,
     reason: str,
     owner_state: str,
+    userid_source: str = "payload",
 ) -> Dict[str, Any]:
     return {
         "status": status,
         "reason": reason,
+        "userid_source": userid_source,
         "enterprise_name": bind_input.enterprise_name,
         "enterprise_short_name": bind_input.enterprise_short_name,
         "plain_corp_id": mask_identifier(bind_input.plain_corp_id),
@@ -378,6 +387,7 @@ def _summary(
             "corp_name": corp.name,
             "original_tenant_id": corp.tenant_id,
             "requested_user_id": bind_input.requested_user_id,
+            "bound_user_id": bind_input.requested_user_id,
             "suite_id": corp.suite_id,
             "suite_scenario": corp.suite_scenario,
             "suite_name": corp.suite_name,
@@ -415,6 +425,7 @@ def _failure_summary(
                 "corp_secret_id": "",
                 "original_tenant_id": "",
                 "requested_user_id": bind_input.requested_user_id,
+                "bound_user_id": bind_input.requested_user_id,
                 "owner_state": owner_state,
             },
             "wecom": {"suiteid": bind_input.wecom_suiteid, "suite_name": bind_input.suite_name},
@@ -423,6 +434,16 @@ def _failure_summary(
     result["error_msg"] = _public_error_msg(reason, exc)
     result["detail"] = str(exc)
     return result
+
+
+def _with_corp_default_userid(bind_input: JdyWecomBindInput, corp: JdyCorpDeploy) -> tuple[JdyWecomBindInput, str]:
+    explicit_userid = bind_input.requested_user_id.strip()
+    if explicit_userid:
+        return bind_input, "payload"
+    default_userid = corp.default_userid.strip()
+    if not default_userid:
+        return bind_input, "default"
+    return replace(bind_input, requested_user_id=default_userid), "default"
 
 
 def _missing_cookie_summary(bind_input: JdyWecomBindInput, exc: Exception) -> Dict[str, Any]:

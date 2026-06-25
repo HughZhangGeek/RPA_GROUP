@@ -3,6 +3,7 @@ import json
 import stat
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -168,6 +169,7 @@ def _start_bind_with_recoverable_context(
             bind_input.plain_corp_id,
             bind_input.enterprise_short_name or bind_input.enterprise_name,
         )
+        bind_input = _with_corp_default_userid_for_write(bind_input, corp)
     except JdyAdminError:
         owner = jdy_client.check_wework_owner(
             bind_input.requested_user_id,
@@ -299,6 +301,8 @@ def _recover_corp_from_owner_for_write(
     if corp_name not in acceptable_names:
         return None
     return JdyCorpDeploy(
+        deploy_id=bind_input.requested_user_id,
+        default_userid=bind_input.requested_user_id,
         corp_id=owner.owner_corp_id,
         name=corp_name,
         tenant_id=bind_input.requested_user_id,
@@ -307,6 +311,15 @@ def _recover_corp_from_owner_for_write(
         suite_id=bind_input.suite_id,
         suite_scenario=bind_input.suite_scenario,
     )
+
+
+def _with_corp_default_userid_for_write(bind_input: JdyWecomBindInput, corp: JdyCorpDeploy) -> JdyWecomBindInput:
+    if bind_input.requested_user_id.strip():
+        return bind_input
+    default_userid = corp.default_userid.strip()
+    if not default_userid:
+        return bind_input
+    return replace(bind_input, requested_user_id=default_userid)
 
 
 def _save_development_info_and_confirm(
