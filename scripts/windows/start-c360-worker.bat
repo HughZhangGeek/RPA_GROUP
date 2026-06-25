@@ -22,4 +22,4 @@ cd /d "%RPA_WORKDIR%" || exit /b 1
 echo [INFO] Starting CSM C360 RPA worker from %CD%
 echo [INFO] Press Ctrl+C in this window to stop the worker.
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -NoExit -Command "$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '%RPA_WORKDIR%'; . '.\.local\rpa-worker-env.ps1'; $env:PYTHONIOENCODING = 'utf-8'; python -m rpa_platform.worker.c360_worker --verbose"
+powershell.exe -NoLogo -ExecutionPolicy Bypass -NoExit -File "%~dp0start-c360-worker.ps1" -WorkDir "%RPA_WORKDIR%"
