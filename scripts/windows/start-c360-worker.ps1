@@ -12,17 +12,15 @@ function Resolve-WorkerPython {
         throw "RPA_PYTHON is set but not found: $env:RPA_PYTHON"
     }
 
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        return @{ Command = $python.Source; Args = @() }
+    $candidates = @()
+    if ($env:CONDA_PREFIX) {
+        if ((Split-Path -Leaf $env:CONDA_PREFIX) -eq "RPA_GROUP") {
+            $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
+        }
+        $candidates += (Join-Path $env:CONDA_PREFIX "envs\RPA_GROUP\python.exe")
     }
 
-    $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($py) {
-        return @{ Command = $py.Source; Args = @("-3") }
-    }
-
-    $candidates = @(
+    $candidates += @(
         "$env:USERPROFILE\miniconda3\envs\RPA_GROUP\python.exe",
         "$env:USERPROFILE\anaconda3\envs\RPA_GROUP\python.exe",
         "C:\ProgramData\miniconda3\envs\RPA_GROUP\python.exe",
@@ -34,6 +32,21 @@ function Resolve-WorkerPython {
         if (Test-Path -LiteralPath $candidate) {
             return @{ Command = $candidate; Args = @() }
         }
+    }
+
+    $conda = Get-Command conda -ErrorAction SilentlyContinue
+    if ($conda) {
+        return @{ Command = "conda"; Args = @("run", "--no-capture-output", "-n", "RPA_GROUP", "python") }
+    }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) {
+        return @{ Command = $python.Source; Args = @() }
+    }
+
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($py) {
+        return @{ Command = $py.Source; Args = @("-3") }
     }
 
     throw @"
@@ -62,7 +75,14 @@ if (-not (Test-Path -LiteralPath $envFile)) {
 $env:PYTHONIOENCODING = "utf-8"
 
 $resolved = Resolve-WorkerPython
-Write-Host "[INFO] Using Python: $($resolved.Command)"
+Write-Host "[INFO] Using Python command: $($resolved.Command) $($resolved.Args -join ' ')"
+
+$probeCode = "import importlib.util, sys; print('[INFO] Python executable: ' + sys.executable); sys.exit(0 if (importlib.util.find_spec('websockets') or importlib.util.find_spec('aiohttp')) else 42)"
+$probeArgs = @($resolved.Args) + @("-c", $probeCode)
+& $resolved.Command @probeArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "Selected Python cannot import websockets or aiohttp. Make sure the RPA_GROUP conda env is selected, or install worker WSS dependencies in that env."
+}
 
 $workerArgs = @($resolved.Args) + @("-m", "rpa_platform.worker.c360_worker", "--verbose")
 & $resolved.Command @workerArgs
