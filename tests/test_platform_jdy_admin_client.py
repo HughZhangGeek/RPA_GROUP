@@ -107,7 +107,10 @@ class JdyAdminClientTest(unittest.TestCase):
         self.assertEqual([call["payload"]["filter"] for call in transport.calls], ["安徽云速付"])
 
     def test_resolve_unique_reports_chinese_business_errors(self):
-        with self.assertRaisesRegex(MissingCorpDeployError, "根据 CorpID 未检索到企业"):
+        with self.assertRaisesRegex(
+            MissingCorpDeployError,
+            "根据当前 CorpID 暂无匹配企业，请检查 CorpID 输入无误，并确认对应企业已完成扫码授权。",
+        ):
             JdyAdminClient(
                 FakeTransport(
                     [
