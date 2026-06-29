@@ -22,11 +22,15 @@ class FakeJdyTransport(JdyAdminTransport):
         can_bind_corp_secret=True,
         can_update_corp_secret=False,
         install_response=None,
+        suite_name="简道云",
+        integrate_suite_name="简道云集成",
     ):
         self.call_log = call_log
         self.can_bind_corp_secret = can_bind_corp_secret
         self.can_update_corp_secret = can_update_corp_secret
         self.install_response = install_response or {"tenant_id": "user-1", "owner_id": "user-1"}
+        self.suite_name = suite_name
+        self.integrate_suite_name = integrate_suite_name
         self.calls = []
 
     def post_json(self, path, payload):
@@ -41,8 +45,8 @@ class FakeJdyTransport(JdyAdminTransport):
                         "corp_id": "corp-secret",
                         "name": "上海测试客户",
                         "tenant_id": "old-user",
-                        "suite_name": "简道云",
-                        "integrate_suite_name": "简道云集成",
+                        "suite_name": self.suite_name,
+                        "integrate_suite_name": self.integrate_suite_name,
                         "suite_id": 1,
                         "suite_scenario": "main",
                     }
@@ -59,8 +63,9 @@ class FakeJdyTransport(JdyAdminTransport):
 
 
 class FakeWecomTransport(WecomAdminTransport):
-    def __init__(self, call_log):
+    def __init__(self, call_log, app_name="简道云"):
         self.call_log = call_log
+        self.app_name = app_name
         self.calls = []
 
     def get_json(self, path, params, headers):
@@ -74,7 +79,7 @@ class FakeWecomTransport(WecomAdminTransport):
                         {
                             "app_id": "app-1",
                             "authcorp_name": "上海测试客户",
-                            "name": "简道云",
+                            "name": self.app_name,
                             "logo": "logo-url",
                             "description": "desc",
                             "customized_app_status": 0,
@@ -137,14 +142,19 @@ def make_service(
     can_bind_corp_secret=True,
     can_update_corp_secret=False,
     install_response=None,
+    suite_name="简道云",
+    integrate_suite_name="简道云集成",
+    app_name="简道云",
 ):
     jdy_transport = FakeJdyTransport(
         call_log,
         can_bind_corp_secret=can_bind_corp_secret,
         can_update_corp_secret=can_update_corp_secret,
         install_response=install_response,
+        suite_name=suite_name,
+        integrate_suite_name=integrate_suite_name,
     )
-    wecom_transport = FakeWecomTransport(call_log)
+    wecom_transport = FakeWecomTransport(call_log, app_name=app_name)
     service = JdyWecomBindService(
         jdy_client=JdyAdminClient(jdy_transport),
         wecom_client=WecomAdminClient(wecom_transport),
@@ -247,6 +257,39 @@ class JdyWecomBindServiceTest(unittest.TestCase):
         ][0]
         self.assertEqual(order_payload["auditorder"]["suiteid"], 1009479)
         self.assertEqual(order_payload["auditorder"]["corpappid"], "app-1")
+
+    def test_start_bind_uses_education_suite_for_wecom_query_and_write_when_jdy_integrate_suite_is_education(self):
+        call_log = []
+        service, _jdy_transport, wecom_transport = make_service(
+            call_log,
+            integrate_suite_name="简道云教育版",
+            app_name="简道云教育版",
+        )
+
+        result = service.start_bind(make_request(), now=datetime(2026, 6, 16, 10, 0, 0))
+
+        self.assertEqual(result.context["wecom"]["suiteid"], 1038071)
+        self.assertEqual(result.context["wecom"]["suite_name"], "简道云教育版")
+        self.assertEqual(wecom_transport.calls[0]["params"]["suiteid"], "1038071")
+        save_payload = [
+            call["payload"]
+            for call in call_log
+            if call["path"] == "/wwopen/developer/customApp/tpl/corpApp"
+            and call["payload"]["corpapp"].get("token") == "token-secret"
+        ][0]
+        privilege_payload = [
+            call["payload"]
+            for call in call_log
+            if call["path"] == "/wwopen/api/customApp/privilege/getCustomizedAppPrivilege"
+        ][0]
+        order_payload = [
+            call["payload"]
+            for call in call_log
+            if call["path"] == "/wwopen/developer/order/add"
+        ][0]
+        self.assertEqual(save_payload["suiteid"], "1038071")
+        self.assertEqual(privilege_payload["suiteid"], "1038071")
+        self.assertEqual(order_payload["auditorder"]["suiteid"], 1038071)
 
     def test_start_bind_uses_corp_tenant_id_when_payload_userid_is_blank(self):
         call_log = []

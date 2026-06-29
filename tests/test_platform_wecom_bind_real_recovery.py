@@ -35,6 +35,7 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(bind_input.plain_corp_id, "ww_test_corp")
         self.assertEqual(bind_input.requested_user_id, "zh_test_user")
         self.assertEqual(bind_input.wecom_suiteid, 1009479)
+        self.assertTrue(bind_input.wecom_suite_explicit)
 
     def test_build_bind_input_from_csm_semantic_payload(self):
         from rpa_platform.worker.wecom_bind_real_recovery import build_bind_input_from_context
@@ -55,6 +56,9 @@ class WecomBindRealRecoveryTest(unittest.TestCase):
         self.assertEqual(bind_input.enterprise_short_name, "上海测试")
         self.assertEqual(bind_input.plain_corp_id, "ww_semantic_corp")
         self.assertEqual(bind_input.requested_user_id, "zh_test_userid")
+        self.assertEqual(bind_input.wecom_suiteid, 1009479)
+        self.assertEqual(bind_input.suite_name, "简道云")
+        self.assertFalse(bind_input.wecom_suite_explicit)
 
     def test_missing_required_context_returns_business_unexecutable_without_write(self):
         from rpa_platform.worker.wecom_bind_real_recovery import RealWecomBindRecovery

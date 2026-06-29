@@ -25,7 +25,11 @@ from rpa_platform.integrations.wecom_admin_client import (
     WecomAdminError,
     WecomSaveAppRequest,
 )
-from rpa_platform.services.wecom_bind_service import JdyWecomBindInput, JdyWecomBindService
+from rpa_platform.services.wecom_bind_service import (
+    JdyWecomBindInput,
+    JdyWecomBindService,
+    with_resolved_wecom_suite,
+)
 from scripts.dev.check_wecom_bind_real_readonly import (
     JdyCookieTransport,
     WecomCookieTransport,
@@ -170,6 +174,7 @@ def _start_bind_with_recoverable_context(
             bind_input.enterprise_short_name or bind_input.enterprise_name,
         )
         bind_input = _with_corp_default_userid_for_write(bind_input, corp)
+        bind_input = with_resolved_wecom_suite(bind_input, corp)
     except JdyAdminError:
         owner = jdy_client.check_wework_owner(
             bind_input.requested_user_id,
@@ -179,6 +184,7 @@ def _start_bind_with_recoverable_context(
         corp = _recover_corp_from_owner_for_write(bind_input, owner)
         if corp is None:
             raise
+        bind_input = with_resolved_wecom_suite(bind_input, corp)
     wecom_authcorp_name = bind_input.enterprise_short_name or corp.name or bind_input.enterprise_name
     app = wecom_client.resolve_unique_custom_app(
         suiteid=bind_input.wecom_suiteid,

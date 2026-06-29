@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from rpa_platform.domain.redaction import mask_identifier
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient, JdyAdminError, JdyCorpDeploy
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomAdminError, WecomSessionExpiredError
-from rpa_platform.services.wecom_bind_service import JdyWecomBindInput
+from rpa_platform.services.wecom_bind_service import JdyWecomBindInput, with_resolved_wecom_suite
 
 
 JDY_BASE_URL = "https://dc.jdydevelop.com"
@@ -109,6 +109,7 @@ def run_readonly_preflight(
     try:
         corp = jdy_client.resolve_unique_corp(bind_input.plain_corp_id, jdy_lookup_name)
         bind_input, userid_source = _with_corp_default_userid(bind_input, corp)
+        bind_input = with_resolved_wecom_suite(bind_input, corp)
     except (JdyAdminError, JsonHttpError) as exc:
         userid_source = "payload" if bind_input.requested_user_id.strip() else "default"
         if _is_jdy_session_expired_error(exc):
@@ -126,6 +127,7 @@ def run_readonly_preflight(
         corp = _recover_corp_from_owner(bind_input, owner)
         if corp is None:
             return _failure_summary(bind_input, "jdy_corp_not_unique_or_missing", exc)
+        bind_input = with_resolved_wecom_suite(bind_input, corp)
 
     corp_name_mismatch = corp.name not in acceptable_names
 

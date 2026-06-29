@@ -13,6 +13,12 @@ from rpa_platform.integrations.jdy_admin_client import (
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomSaveAppRequest
 
 
+DEFAULT_WECOM_SUITEID = 1009479
+DEFAULT_WECOM_SUITE_NAME = "简道云"
+EDUCATION_WECOM_SUITEID = 1038071
+EDUCATION_WECOM_SUITE_NAME = "简道云教育版"
+
+
 class WecomSecretGenerator(Protocol):
     def generate(self) -> Dict[str, str]:
         raise NotImplementedError
@@ -46,6 +52,7 @@ class JdyWecomBindInput:
     wecom_suiteid: int
     suite_name: str
     enterprise_short_name: str = ""
+    wecom_suite_explicit: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,7 @@ class JdyWecomBindService:
             request.enterprise_short_name or request.enterprise_name,
         )
         request = _with_corp_default_userid(request, corp)
+        request = with_resolved_wecom_suite(request, corp)
         wecom_authcorp_name = request.enterprise_short_name or corp.name or request.enterprise_name
         app = self.wecom_client.resolve_unique_custom_app(
             suiteid=request.wecom_suiteid,
@@ -183,3 +191,23 @@ def _with_corp_default_userid(request: JdyWecomBindInput, corp: Any) -> JdyWecom
     if not default_userid:
         return request
     return replace(request, requested_user_id=default_userid)
+
+
+def with_resolved_wecom_suite(request: JdyWecomBindInput, corp: Any) -> JdyWecomBindInput:
+    if request.wecom_suite_explicit:
+        return request
+    if _corp_uses_education_suite(corp):
+        return replace(
+            request,
+            wecom_suiteid=EDUCATION_WECOM_SUITEID,
+            suite_name=EDUCATION_WECOM_SUITE_NAME,
+        )
+    return request
+
+
+def _corp_uses_education_suite(corp: Any) -> bool:
+    suite_texts = [
+        str(getattr(corp, "integrate_suite_name", "") or ""),
+        str(getattr(corp, "suite_name", "") or ""),
+    ]
+    return any(EDUCATION_WECOM_SUITE_NAME in text for text in suite_texts)

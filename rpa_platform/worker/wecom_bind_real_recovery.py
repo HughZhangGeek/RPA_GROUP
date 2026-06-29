@@ -3,7 +3,12 @@ import os
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from rpa_platform.notifications.wecom_bot import WecomBotClient
-from rpa_platform.services.wecom_bind_service import JdyWecomBindInput, RandomWecomSecretGenerator
+from rpa_platform.services.wecom_bind_service import (
+    DEFAULT_WECOM_SUITEID,
+    DEFAULT_WECOM_SUITE_NAME,
+    JdyWecomBindInput,
+    RandomWecomSecretGenerator,
+)
 from rpa_platform.worker.wecom_bind_recovery_handler import WecomBindRecoveryTaskHandler
 from rpa_platform.worker.wecom_login_recovery import (
     GenericQrLoginNotifier,
@@ -149,8 +154,9 @@ def build_bind_input_from_context(context: Dict[str, Any]) -> JdyWecomBindInput:
         requested_user_id=_first_text(context, "requested_user_id", "userid", "user_id", "User_ID"),
         suite_id=_parse_int(context.get("suite_id"), 1),
         suite_scenario=str(context.get("suite_scenario") or "main").strip(),
-        wecom_suiteid=_parse_int(context.get("wecom_suiteid"), 1009479),
-        suite_name=str(context.get("suite_name") or "简道云").strip(),
+        wecom_suiteid=_parse_int(context.get("wecom_suiteid"), DEFAULT_WECOM_SUITEID),
+        suite_name=str(context.get("suite_name") or DEFAULT_WECOM_SUITE_NAME).strip(),
+        wecom_suite_explicit=_has_nonblank(context, "wecom_suiteid") or _has_nonblank(context, "suite_name"),
     )
 
 
@@ -386,6 +392,11 @@ def _first_text(context: Mapping[str, Any], *keys: str) -> str:
         if value is not None and str(value).strip():
             return str(value).strip()
     return ""
+
+
+def _has_nonblank(context: Mapping[str, Any], key: str) -> bool:
+    value = context.get(key)
+    return value is not None and str(value).strip() != ""
 
 
 def _with_default_userid(context: Dict[str, Any], env: Mapping[str, str]) -> Dict[str, Any]:

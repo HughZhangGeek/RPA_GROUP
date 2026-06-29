@@ -11,8 +11,10 @@ from rpa_platform.services.wecom_bind_service import JdyWecomBindInput
 
 
 class RecordingJdyTransport(JdyAdminTransport):
-    def __init__(self, owner_response=None):
+    def __init__(self, owner_response=None, suite_name="简道云", integrate_suite_name="简道云集成"):
         self.owner_response = owner_response or {"can_bind_corp_secret": True}
+        self.suite_name = suite_name
+        self.integrate_suite_name = integrate_suite_name
         self.calls = []
 
     def post_json(self, path, payload):
@@ -26,8 +28,8 @@ class RecordingJdyTransport(JdyAdminTransport):
                         "corp_id": "corp-secret-123456",
                         "name": "上海测试客户",
                         "tenant_id": "tenant-default-userid",
-                        "suite_name": "简道云",
-                        "integrate_suite_name": "简道云集成",
+                        "suite_name": self.suite_name,
+                        "integrate_suite_name": self.integrate_suite_name,
                         "suite_id": 1,
                         "suite_scenario": "main",
                     }
@@ -39,7 +41,8 @@ class RecordingJdyTransport(JdyAdminTransport):
 
 
 class RecordingWecomTransport(WecomAdminTransport):
-    def __init__(self):
+    def __init__(self, app_name="简道云"):
+        self.app_name = app_name
         self.calls = []
 
     def get_json(self, path, params, headers):
@@ -54,7 +57,7 @@ class RecordingWecomTransport(WecomAdminTransport):
                         {
                             "app_id": "app-123456789",
                             "authcorp_name": "上海测试客户",
-                            "name": "简道云",
+                            "name": self.app_name,
                             "logo": "logo-url",
                             "description": "desc",
                             "customized_app_status": 0,
@@ -158,6 +161,59 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["jdy"]["requested_user_id"], "tenant-default-userid")
         self.assertEqual(result["jdy"]["bound_user_id"], "tenant-default-userid")
         self.assertEqual(result["userid_source"], "default")
+
+    def test_readonly_preflight_uses_education_wecom_suite_when_jdy_integrate_suite_is_education(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        jdy_transport = RecordingJdyTransport(integrate_suite_name="简道云教育版")
+        wecom_transport = RecordingWecomTransport(app_name="简道云教育版")
+
+        result = run_readonly_preflight(
+            make_request(),
+            jdy_client=JdyAdminClient(jdy_transport),
+            wecom_client=WecomAdminClient(wecom_transport),
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["wecom"]["suiteid"], 1038071)
+        self.assertEqual(result["wecom"]["suite_name"], "简道云教育版")
+        self.assertEqual(wecom_transport.calls[0]["params"]["suiteid"], "1038071")
+
+    def test_readonly_preflight_keeps_explicit_payload_wecom_suite_when_jdy_integrate_suite_is_education(self):
+        from dataclasses import replace
+
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        jdy_transport = RecordingJdyTransport(integrate_suite_name="简道云教育版")
+        wecom_transport = RecordingWecomTransport(app_name="简道云")
+
+        result = run_readonly_preflight(
+            replace(make_request(), wecom_suiteid=1009479, suite_name="简道云", wecom_suite_explicit=True),
+            jdy_client=JdyAdminClient(jdy_transport),
+            wecom_client=WecomAdminClient(wecom_transport),
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["wecom"]["suiteid"], 1009479)
+        self.assertEqual(result["wecom"]["suite_name"], "简道云")
+        self.assertEqual(wecom_transport.calls[0]["params"]["suiteid"], "1009479")
+
+    def test_readonly_preflight_keeps_default_wecom_suite_for_normal_jdy_integrate_suite(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        jdy_transport = RecordingJdyTransport(integrate_suite_name="简道云")
+        wecom_transport = RecordingWecomTransport(app_name="简道云")
+
+        result = run_readonly_preflight(
+            make_request(),
+            jdy_client=JdyAdminClient(jdy_transport),
+            wecom_client=WecomAdminClient(wecom_transport),
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["wecom"]["suiteid"], 1009479)
+        self.assertEqual(result["wecom"]["suite_name"], "简道云")
+        self.assertEqual(wecom_transport.calls[0]["params"]["suiteid"], "1009479")
 
     def test_readonly_preflight_accepts_jdy_full_name_and_short_name_pair(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
