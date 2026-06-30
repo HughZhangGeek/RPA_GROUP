@@ -406,6 +406,27 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["error_msg"], "当前填写的 UserID 不是该企业的简道云拥有者，请填写企业拥有者 UserID 后重试")
         self.assertIn("USER_IS_NOT_OWNER", result["detail"])
 
+    def test_readonly_preflight_returns_chinese_error_msg_for_missing_wecom_app(self):
+        from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
+
+        class MissingAppWecomTransport(RecordingWecomTransport):
+            def get_json(self, path, params, headers):
+                response = super().get_json(path, params, headers)
+                if path == "/wwopen/developer/customApp/tpl/app/list":
+                    response["data"]["corpapp"][0]["authcorp_name"] = "别的企业"
+                return response
+
+        result = run_readonly_preflight(
+            make_request(),
+            jdy_client=JdyAdminClient(RecordingJdyTransport()),
+            wecom_client=WecomAdminClient(MissingAppWecomTransport()),
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "wecom_app_not_unique_or_missing")
+        self.assertEqual(result["error_msg"], "未在企微后台找到匹配的简道云应用，请检查授权企业名称、企业简称或套件名称是否一致")
+        self.assertIn("no custom app matched authcorp name and app name", result["detail"])
+
     def test_readonly_preflight_reports_explainable_already_bound_owner_state(self):
         from scripts.dev.check_wecom_bind_real_readonly import run_readonly_preflight
 

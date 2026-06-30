@@ -14,6 +14,7 @@ from rpa_platform.worker.wecom_bind_real_recovery import (
     BUSINESS_UNEXECUTABLE_REASONS,
     build_bind_input_from_context,
 )
+from rpa_platform.worker.wecom_bind_error_messages import known_public_error_msg
 from scripts.dev.check_wecom_bind_real_readonly import CookieSourceError, run_readonly_preflight
 from scripts.dev.run_wecom_bind_real_write import _start_bind_with_recoverable_context
 
@@ -102,11 +103,14 @@ def run_unattended_wecom_bind_write(
             source_context=context,
         )
     except Exception as exc:
+        detail = str(exc)
+        error_msg = known_public_error_msg(detail)
         return {
             "mode": "unattended_write",
             "status": "failed",
             "reason": "real_write_failed",
-            "detail": str(exc),
+            "detail": detail,
+            **({"error_msg": error_msg} if error_msg else {}),
         }
     finally:
         _release_lock(lock_file)

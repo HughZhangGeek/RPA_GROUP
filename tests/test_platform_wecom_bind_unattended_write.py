@@ -334,6 +334,40 @@ class WecomBindUnattendedWriteTest(unittest.TestCase):
         self.assertEqual(result["reason"], "real_write_failed")
         self.assertFalse(lock_file.exists())
 
+    def test_real_write_failure_returns_chinese_error_msg_for_missing_wecom_app(self):
+        from rpa_platform.worker.wecom_bind_unattended_write import run_unattended_wecom_bind_write
+
+        def successful_preflight(*_args, **_kwargs):
+            return {"status": "ok", "reason": "ready_for_confirm_write"}
+
+        class MissingAppWecomTransport(FakeServiceWecomAdminTransport):
+            def get_json(self, path, params, headers):
+                response = super().get_json(path, params, headers)
+                if path == "/wwopen/developer/customApp/tpl/app/list":
+                    response["data"]["corpapp"][0]["authcorp_name"] = "别的企业"
+                return response
+
+        jdy_client, wecom_client, _jdy_transport, _wecom_transport = self._clients(
+            wecom_transport=MissingAppWecomTransport()
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_unattended_wecom_bind_write(
+                task_id="task-missing-wecom-app",
+                context=self._context(),
+                jdy_client=jdy_client,
+                wecom_client=wecom_client,
+                secret_generator=FixedWecomSecretGenerator(token="token-secret", encoding_aes_key="aes-secret"),
+                preflight_runner=successful_preflight,
+                context_file=Path(tmpdir) / "context.json",
+                lock_file=Path(tmpdir) / "write.lock",
+                wait_seconds=0,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "real_write_failed")
+        self.assertEqual(result["error_msg"], "未在企微后台找到匹配的简道云应用，请检查授权企业名称、企业简称或套件名称是否一致")
+        self.assertIn("no custom app matched authcorp name and app name", result["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

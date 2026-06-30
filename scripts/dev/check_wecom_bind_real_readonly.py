@@ -15,6 +15,7 @@ from rpa_platform.domain.redaction import mask_identifier
 from rpa_platform.integrations.jdy_admin_client import JdyAdminClient, JdyAdminError, JdyCorpDeploy
 from rpa_platform.integrations.wecom_admin_client import WecomAdminClient, WecomAdminError, WecomSessionExpiredError
 from rpa_platform.services.wecom_bind_service import JdyWecomBindInput, with_resolved_wecom_suite
+from rpa_platform.worker.wecom_bind_error_messages import known_public_error_msg
 
 
 JDY_BASE_URL = "https://dc.jdydevelop.com"
@@ -467,6 +468,9 @@ def _missing_cookie_summary(bind_input: JdyWecomBindInput, exc: Exception) -> Di
 
 def _public_error_msg(reason: str, exc: Exception) -> str:
     detail = str(exc).strip()
+    known_msg = known_public_error_msg(detail)
+    if known_msg:
+        return known_msg
     if reason == "jdy_owner_check_failed" and _is_empty_owner_userid_error(detail):
         return "未找到可用于绑定的 UserID，请填写 UserID 或配置默认绑定用户后重试"
     if reason == "jdy_owner_check_failed" and _is_non_owner_userid_error(detail):
