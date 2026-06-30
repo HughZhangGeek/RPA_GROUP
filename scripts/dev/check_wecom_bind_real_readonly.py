@@ -467,9 +467,19 @@ def _missing_cookie_summary(bind_input: JdyWecomBindInput, exc: Exception) -> Di
 
 def _public_error_msg(reason: str, exc: Exception) -> str:
     detail = str(exc).strip()
+    if reason == "jdy_owner_check_failed" and _is_empty_owner_userid_error(detail):
+        return "未找到可用于绑定的 UserID，请填写 UserID 或配置默认绑定用户后重试"
     if reason == "jdy_corp_not_unique_or_missing" and detail:
         return detail
     return detail or reason
+
+
+def _is_empty_owner_userid_error(detail: str) -> bool:
+    return (
+        "userId should not be empty" in detail
+        or '"property":"userId"' in detail
+        or '"property": "userId"' in detail
+    )
 
 
 def _build_fake_clients_for_test() -> Dict[str, Any]:
