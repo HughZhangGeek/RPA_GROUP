@@ -372,6 +372,43 @@ class WecomBindRealReadonlyPreflightTest(unittest.TestCase):
         self.assertEqual(result["error_msg"], "未找到可用于绑定的 UserID，请填写 UserID 或配置默认绑定用户后重试")
         self.assertIn("userId should not be empty", result["detail"])
 
+    def test_readonly_preflight_returns_chinese_error_msg_when_corp_lookup_fallback_has_empty_userid(self):
+        from scripts.dev.check_wecom_bind_real_readonly import JsonHttpError, run_readonly_preflight
+
+        class MissingCorpAndEmptyUserIdTransport(RecordingJdyTransport):
+            def post_json(self, path, payload):
+                if path == "/api/fx_sa/wxwork/get_corp_deploy_list":
+                    self.calls.append({"method": "POST", "path": path, "payload": dict(payload)})
+                    return {"has_more": False, "corp_deploy_list": []}
+                if path == "/api/fx_sa/wxwork/get_owner":
+                    self.calls.append({"method": "POST", "path": path, "payload": dict(payload)})
+                    raise JsonHttpError(
+                        'POST https://dc.jdydevelop.com/api/fx_sa/wxwork/get_owner failed: '
+                        'HTTP Error 400: Bad Request {"code":10004,"error":"fx-corp 接口调用异常",'
+                        '"meta":{"data":{"details":{"message":[{"property":"userId","constraints":'
+                        '{"isNotEmpty":"userId should not be empty","isString":"userId must be a string"}}]}}}}'
+                    )
+                return super().post_json(path, payload)
+
+        result = run_readonly_preflight(
+            JdyWecomBindInput(
+                enterprise_name="梦天家居集团（庆元）有限公司",
+                plain_corp_id="",
+                requested_user_id="",
+                suite_id=1,
+                suite_scenario="main",
+                wecom_suiteid=1009479,
+                suite_name="简道云",
+            ),
+            jdy_client=JdyAdminClient(MissingCorpAndEmptyUserIdTransport()),
+            wecom_client=WecomAdminClient(RecordingWecomTransport()),
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "jdy_corp_not_unique_or_missing")
+        self.assertEqual(result["error_msg"], "未找到可用于绑定的 UserID，请填写 UserID 或配置默认绑定用户后重试")
+        self.assertIn("userId should not be empty", result["detail"])
+
     def test_readonly_preflight_returns_chinese_error_msg_for_non_owner_userid(self):
         from scripts.dev.check_wecom_bind_real_readonly import JsonHttpError, run_readonly_preflight
 

@@ -471,9 +471,9 @@ def _public_error_msg(reason: str, exc: Exception) -> str:
     known_msg = known_public_error_msg(detail)
     if known_msg:
         return known_msg
-    if reason == "jdy_owner_check_failed" and _is_empty_owner_userid_error(detail):
+    if _is_empty_owner_userid_error(detail):
         return "未找到可用于绑定的 UserID，请填写 UserID 或配置默认绑定用户后重试"
-    if reason == "jdy_owner_check_failed" and _is_non_owner_userid_error(detail):
+    if _is_non_owner_userid_error(detail):
         return "当前填写的 UserID 不是该企业的简道云拥有者，请填写企业拥有者 UserID 后重试"
     if reason == "jdy_corp_not_unique_or_missing" and detail:
         return detail
